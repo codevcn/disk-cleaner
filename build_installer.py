@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import argparse
 import hashlib
+import json
 import os
 import platform
 import shutil
@@ -34,6 +35,20 @@ TARGET_EXE_PATH = ROOT_DIR / TARGET_EXE_NAME
 BINARY_PAYLOAD = ROOT_DIR / "disk_investigator.exe"
 SKILL_PAYLOAD = ROOT_DIR / "skills" / "disk-cleanup" / "SKILL.md"
 README_PAYLOAD = ROOT_DIR / "README.md"
+BUILD_INFO_PAYLOAD = ROOT_DIR / "build_info.json"
+
+
+def get_current_version() -> str:
+    """Reads current __version__ from disk_investigator/__init__.py."""
+    init_file = ROOT_DIR / "disk_investigator" / "__init__.py"
+    if init_file.exists():
+        with open(init_file, "r", encoding="utf-8") as f:
+            for line in f:
+                if line.startswith("__version__"):
+                    parts = line.split("=")
+                    if len(parts) == 2:
+                        return parts[1].strip().strip('"').strip("'")
+    return "2.1.2"
 
 BUILD_WORK_DIR = ROOT_DIR / "_pyinstaller_installer_work"
 BUILD_DIST_DIR = ROOT_DIR / "_pyinstaller_installer_dist"
@@ -111,14 +126,23 @@ def build_installer() -> bool:
             print(f"[ERROR] '{TARGET_EXE_NAME}' is currently running or locked by another process.")
             return False
 
-    # Step 2: Clean temp dirs
-    print("[2/5] Cleaning temporary build folders...")
+    # Step 2: Clean temp dirs & write build_info.json
+    print("[2/5] Cleaning temporary build folders & writing build_info.json...")
     clean_temporary_dirs()
     BUILD_WORK_DIR.mkdir(parents=True, exist_ok=True)
     BUILD_DIST_DIR.mkdir(parents=True, exist_ok=True)
 
+    version = get_current_version()
+    build_info_data = {
+        "version": version,
+        "release_tag": f"v{version}",
+        "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+    }
+    with open(BUILD_INFO_PAYLOAD, "w", encoding="utf-8") as f:
+        json.dump(build_info_data, f, indent=2)
+
     # Step 3: Run PyInstaller
-    print("[3/5] Compiling single-file Setup EXE with embedded payload...")
+    print(f"[3/5] Compiling single-file Setup EXE (v{version}) with embedded payload...")
     add_data_delimiter = ";" if sys.platform == "win32" else ":"
 
     cmd = [
@@ -135,6 +159,7 @@ def build_installer() -> bool:
         f"--add-data={str(BINARY_PAYLOAD)}{add_data_delimiter}.",
         f"--add-data={str(SKILL_PAYLOAD)}{add_data_delimiter}.",
         f"--add-data={str(README_PAYLOAD)}{add_data_delimiter}.",
+        f"--add-data={str(BUILD_INFO_PAYLOAD)}{add_data_delimiter}.",
         str(ENTRY_POINT),
     ]
 
@@ -153,7 +178,7 @@ def build_installer() -> bool:
         return False
 
     # Step 4: Quality Gate verification
-    print("[4/5] Verifying compiled Setup EXE (--help smoke test)...")
+    print("[4/5] Verifying compiled Setup EXE (--help & --version smoke tests)...")
     try:
         smoke_proc = subprocess.run(
             [str(compiled_installer), "--help"],
@@ -168,7 +193,27 @@ def build_installer() -> bool:
             print(smoke_proc.stderr)
             clean_temporary_dirs()
             return False
-        print("[+] Setup EXE self-test OK (--help works).")
+
+        ver_proc = subprocess.run(
+            [str(compiled_installer), "--version"],
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            timeout=15,
+        )
+        if ver_proc.returncode != 0:
+            print(f"[ERROR] Setup EXE --version self-test failed with code {ver_proc.returncode}")
+            print(ver_proc.stderr)
+            clean_temporary_dirs()
+            return False
+
+        ver_output = ver_proc.stdout.strip() or ver_proc.stderr.strip()
+        if version not in ver_output:
+            print(f"[ERROR] Version mismatch! Expected {version}, got: {ver_output}")
+            clean_temporary_dirs()
+            return False
+        print(f"[+] Setup EXE self-test OK (--help & --version: {ver_output}).")
     except Exception as e:
         print(f"[ERROR] Setup EXE smoke test exception: {e}")
         clean_temporary_dirs()

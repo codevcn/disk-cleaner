@@ -10,6 +10,11 @@ build/
 dist/
 _pyinstaller_work/
 _pyinstaller_dist/
+_pyinstaller_installer_work/
+_pyinstaller_installer_dist/
+*.rollback
+SHA256SUMS.txt
+build_info.json
 
 # Standalone Windows Binaries (Distributed via GitHub Releases)
 *.exe

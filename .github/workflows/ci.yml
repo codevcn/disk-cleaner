@@ -31,13 +31,25 @@ jobs:
           python -m pip install --upgrade pip
           pip install pyinstaller
 
-      - name: Run Full Test Suite (59 Tests)
+      - name: Assert Version Consistency
+        if: startsWith(github.ref, 'refs/tags/v')
+        shell: pwsh
         run: |
-          python -m unittest discover -s disk_investigator/tests -v
+          $tagVersion = "${{ github.ref_name }}".TrimStart('v')
+          $initVersion = (Get-Content disk_investigator/__init__.py | Select-String '__version__\s*=\s*["'']([^"'']+)["'']').Matches.Groups[1].Value
+          Write-Host "Tag Version: $tagVersion | Init Version: $initVersion"
+          if ($tagVersion -ne $initVersion) {
+            Write-Error "Version Mismatch! Tag $tagVersion does not match disk_investigator/__init__.py ($initVersion)"
+            exit 1
+          }
 
       - name: Package Standalone CLI (disk_investigator.exe)
         run: |
           python build_exe.py
+
+      - name: Run Full Test Suite (61 Tests)
+        run: |
+          python -m unittest discover -s disk_investigator/tests -v
 
       - name: Package 1-Click Setup EXE (disk-investigator-setup.exe)
         run: |
@@ -47,6 +59,7 @@ jobs:
         run: |
           .\disk_investigator.exe --version
           .\disk_investigator.exe doctor
+          .\disk-investigator-setup.exe --version
           .\disk-investigator-setup.exe --help
 
       - name: Generate Cryptographic SHA-256 Manifest

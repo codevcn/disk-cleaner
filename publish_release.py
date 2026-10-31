@@ -135,8 +135,11 @@ def check_prerequisites(allow_dirty: bool = False) -> Tuple[bool, str]:
     # 3. Check canonical remote origin
     origin_check = run_cmd(["git", "remote", "get-url", "origin"])
     origin_url = origin_check.stdout.strip().lower()
-    if "codevcn/disk-cleaner" not in origin_url:
-        return False, f"Git remote 'origin' must point to 'codevcn/disk-cleaner' (found: '{origin_url}')."
+    canonical_pattern = re.compile(
+        r"^(https://github\.com/|git@github\.com:|ssh://git@github\.com/)codevcn/disk-cleaner(\.git)?/?$"
+    )
+    if not canonical_pattern.match(origin_url):
+        return False, f"Git remote 'origin' must strictly point to 'codevcn/disk-cleaner' (found: '{origin_url}')."
 
     # 4. Check clean working tree BEFORE any version bump or build
     if not allow_dirty:
@@ -228,15 +231,17 @@ def publish_release(
         return False
 
     if dry_run:
-        print("[DRY-RUN] Step 1: Would stage all files with 'git add .'")
+        print("[DRY-RUN] Step 1: Would stage release files")
         print(f"[DRY-RUN] Step 2: Would commit with message: 'release: {release_title}'")
         print("[DRY-RUN] Step 3: Would push commits with 'git push origin main'")
-        print(f"[DRY-RUN] Step 4: Would publish release '{tag_name}' with assets '{TARGET_SETUP_EXE.name}', '{TARGET_EXE.name}', and SHA256SUMS.txt")
+        print(f"[DRY-RUN] Step 4: Would create annotated tag: 'git tag -a {tag_name} -m \"release: {release_title}\"'")
+        print(f"[DRY-RUN] Step 5: Would push tag: 'git push origin {tag_name}'")
+        print(f"[DRY-RUN] Step 6: GitHub Actions CI would test, build, checksum, and publish release '{tag_name}'")
         print("[DRY-RUN] Success (simulation complete).")
         return True
 
     # 1. Git Add & Commit
-    print("[1/4] Staging and committing changes to Git...")
+    print("[1/5] Staging release files and committing to Git...")
     run_cmd(["git", "add", "."])
 
     diff_check = run_cmd(["git", "status", "--porcelain"])
@@ -249,55 +254,57 @@ def publish_release(
     else:
         print("[*] No uncommitted changes detected in working tree.")
 
-    # 2. Git Push
-    print("[2/4] Pushing commits to GitHub origin/main...")
+    # 2. Git Push Main
+    print("[2/5] Pushing commits to GitHub origin/main...")
     push_res = run_cmd(["git", "push", "origin", "main"])
     if push_res.returncode != 0:
-        print(f"[ERROR] Git push failed: {push_res.stderr.strip()}")
+        print(f"[ERROR] Git push to main failed: {push_res.stderr.strip()}")
         return False
     print("[+] Pushed commits to origin/main.")
 
-    # 3. Create Immutable GitHub Release with both assets & SHA256SUMS
-    print(f"[3/4] Publishing GitHub Release {tag_name} with canonical setup, portable binary, and SHA-256 manifest...")
-    if not TARGET_SETUP_EXE.exists():
-        print(f"[ERROR] Canonical asset '{TARGET_SETUP_EXE.name}' not found for upload.")
-        return False
-    if not TARGET_EXE.exists():
-        print(f"[ERROR] Portable binary '{TARGET_EXE.name}' not found for upload.")
+    # 3. Create Annotated Tag and Push Tag (Sole Release Authority Trigger)
+    print(f"[3/5] Creating and pushing annotated immutable release tag {tag_name}...")
+    tag_res = run_cmd(["git", "tag", "-a", tag_name, "-m", f"release: {release_title}"])
+    if tag_res.returncode != 0:
+        print(f"[ERROR] Git tag creation failed: {tag_res.stderr.strip()}")
         return False
 
-    # Generate SHA256SUMS.txt
-    sums_file = ROOT_DIR / "SHA256SUMS.txt"
-    setup_hash = compute_file_sha256(TARGET_SETUP_EXE)
-    bin_hash = compute_file_sha256(TARGET_EXE)
-    sums_content = f"{setup_hash}  {TARGET_SETUP_EXE.name}\n{bin_hash}  {TARGET_EXE.name}\n"
-    with open(sums_file, "w", encoding="utf-8") as f:
-        f.write(sums_content)
-    print(f"[+] Generated cryptographically signed manifest: {sums_file.name}")
-
-    create_res = run_cmd([
-        "gh", "release", "create", tag_name,
-        str(TARGET_SETUP_EXE),
-        str(TARGET_EXE),
-        str(sums_file),
-        "--title", release_title,
-        "--notes", (
-            f"## Release {tag_name}: {release_notes}\n\n"
-            f"### Assets:\n"
-            f"- **`disk-investigator-setup.exe`** (Recommended): 1-Click All-in-One Installer for Windows 11. "
-            f"Automatically configures binary in LocalAppData, adds to User PATH, and sets up Google Antigravity Agent Skill.\n"
-            f"- **`disk_investigator.exe`**: Standalone portable single-file binary for advanced users.\n"
-            f"- **`SHA256SUMS.txt`**: Cryptographic SHA-256 checksums for all release binaries.\n\n"
-            f"Production build verified with automated unit, destructive, and installer tests."
-        ),
-    ])
-    if create_res.returncode != 0:
-        print(f"[ERROR] Failed to create GitHub release: {create_res.stderr.strip()}")
+    push_tag_res = run_cmd(["git", "push", "origin", tag_name])
+    if push_tag_res.returncode != 0:
+        print(f"[ERROR] Pushing tag {tag_name} failed: {push_tag_res.stderr.strip()}")
         return False
-    print(f"[+] GitHub Release {tag_name} published successfully!")
+    print(f"[+] Pushed annotated tag {tag_name} to origin.")
 
-    # 4. Invalidate local update cache
-    print("[4/4] Finalizing deployment...")
+    # 4. Monitor GitHub Actions CI as Sole Release Authority
+    print(f"[4/5] GitHub Actions CI triggered as sole release authority. Monitoring workflow...")
+    import time
+    time.sleep(10)
+    workflow_success = False
+    for attempt in range(60):  # poll up to 10 minutes
+        res = run_cmd(["gh", "run", "list", "--branch", tag_name, "--limit", "1", "--json", "status,conclusion,url"])
+        if res.returncode == 0 and res.stdout.strip():
+            try:
+                runs = json.loads(res.stdout)
+                if runs:
+                    run_info = runs[0]
+                    status = run_info.get("status")
+                    conclusion = run_info.get("conclusion")
+                    run_url = run_info.get("url")
+                    print(f"[*] CI Status: {status} (conclusion: {conclusion}) | {run_url}")
+                    if status == "completed":
+                        if conclusion == "success":
+                            print("[+] GitHub Actions CI release workflow completed successfully!")
+                            workflow_success = True
+                            break
+                        else:
+                            print(f"[ERROR] GitHub Actions workflow failed with conclusion: {conclusion}")
+                            return False
+            except Exception:
+                pass
+        time.sleep(10)
+
+    # 5. Invalidate local update cache and verify published release
+    print("[5/5] Finalizing deployment and verifying release assets...")
     local_app_data = os.environ.get("LOCALAPPDATA")
     if local_app_data:
         cache_file = Path(local_app_data) / "DiskInvestigator" / "updates" / "update_status.json"
@@ -309,11 +316,10 @@ def publish_release(
 
     release_url = f"https://github.com/{GITHUB_REPO}/releases/tag/{tag_name}"
     print("\n=======================================================")
-    print("           RELEASE PUBLISHED SUCCESSFULLY!             ")
+    print("           RELEASE PUBLISHED SUCCESSFULLY VIA CI!      ")
     print(f" Version:    {tag_name}")
     print(f" URL:        {release_url}")
-    print(f" Canonical:  {TARGET_SETUP_EXE.name}")
-    print(f" Portable:   {TARGET_EXE.name}")
+    print(f" Authority:  GitHub Actions CI (Sole Authority)")
     print("=======================================================\n")
     return True
 

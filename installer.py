@@ -43,9 +43,39 @@ if sys.platform == "win32":
 
 APP_NAME = "DiskInvestigator"
 APP_DISPLAY_NAME = "Disk Investigator (AI-Native Storage Cleaner)"
-DEFAULT_VERSION = "2.1.0"
 SKILL_FOLDER_NAME = "disk-cleanup"
 GITHUB_REPO = "codevcn/disk-cleaner"
+
+
+def get_installer_version() -> str:
+    """
+    Retrieves authoritative version from embedded build_info.json or __init__.py.
+    Provides Single Source of Truth across CLI, installer, and manifests.
+    """
+    # 1. Check embedded build_info.json (PyInstaller bundled mode)
+    build_info_path = get_resource_path("build_info.json")
+    if build_info_path and build_info_path.exists():
+        try:
+            with open(build_info_path, "r", encoding="utf-8") as f:
+                data = json.load(f)
+                if data.get("version"):
+                    return str(data["version"]).strip()
+        except Exception:
+            pass
+
+    # 2. Check disk_investigator/__init__.py in development workspace
+    dev_root = Path(__file__).resolve().parent
+    init_file = dev_root / "disk_investigator" / "__init__.py"
+    if init_file.exists():
+        try:
+            with open(init_file, "r", encoding="utf-8") as f:
+                for line in f:
+                    if line.startswith("__version__"):
+                        return line.split("=")[1].strip().strip('"').strip("'")
+        except Exception:
+            pass
+
+    return "2.1.2"
 
 
 def compute_sha256(filepath: Path) -> str:
@@ -144,14 +174,17 @@ def broadcast_environment_change() -> None:
         print(f"[!] Cảnh báo: Không thể phát thông báo WM_SETTINGCHANGE: {e}")
 
 
-def add_bin_to_user_path(bin_dir: Path) -> bool:
+def add_bin_to_user_path(bin_dir: Path) -> Tuple[bool, bool]:
     """
     Safely adds bin_dir to HKCU\\Environment\\Path using winreg.
     Preserves all existing variables and REG_EXPAND_SZ typing.
     Never uses 'setx' to prevent length truncation bugs.
+    Returns:
+        (success: bool, changed: bool)
+        'changed' is True ONLY if bin_dir was newly added in this operation.
     """
     if sys.platform != "win32":
-        return False
+        return False, False
 
     import winreg
 
@@ -175,7 +208,7 @@ def add_bin_to_user_path(bin_dir: Path) -> bool:
             for entry in entries:
                 if entry.lower().rstrip("\\") == bin_norm:
                     print(f"[*] Thư mục bin đã tồn tại trong User PATH: {bin_dir}")
-                    return True
+                    return True, False
 
             # Append new entry
             entries.append(bin_str)
@@ -185,10 +218,10 @@ def add_bin_to_user_path(bin_dir: Path) -> bool:
             print(f"[+] Đã thêm vào User PATH: {bin_dir}")
 
         broadcast_environment_change()
-        return True
+        return True, True
     except Exception as e:
         print(f"[ERROR] Thất bại khi ghi Registry User PATH: {e}")
-        return False
+        return False, False
 
 
 def remove_bin_from_user_path(bin_dir: Path) -> bool:
@@ -254,9 +287,11 @@ def generate_uninstaller_script(install_dir: Path, bin_dir: Path, skill_path: Pa
     """
     Generates a standalone uninstall.cmd script in the install directory.
     Enables one-click uninstallation from Windows Explorer or CMD.
+    Ensures safe cleanup of the lifecycle directory and executable after exit.
     """
     uninstaller_path = install_dir / "uninstall.cmd"
-    lifecycle_setup_exe = install_dir / "lifecycle" / "disk-investigator-setup.exe"
+    lifecycle_dir = install_dir / "lifecycle"
+    lifecycle_setup_exe = lifecycle_dir / "disk-investigator-setup.exe"
 
     batch_content = f"""@echo off
 chcp 65001 >nul
@@ -278,11 +313,15 @@ echo [*] Đang gỡ bỏ binary và thiết lập môi trường...
 
 if exist "{lifecycle_setup_exe}" (
     "{lifecycle_setup_exe}" --uninstall --silent
+    set "UNINST_CODE=%ERRORLEVEL%"
+    del /f /q "{lifecycle_setup_exe}" >nul 2>&1
+    rd /q "{lifecycle_dir}" >nul 2>&1
 ) else (
     echo [*] Xóa thư mục cài đặt...
     rd /s /q "{install_dir}\\bin" >nul 2>&1
     del /f /q "{install_dir}\\README.md" >nul 2>&1
     del /f /q "{install_dir}\\install_manifest.json" >nul 2>&1
+    rd /s /q "{lifecycle_dir}" >nul 2>&1
 )
 
 echo.
@@ -318,6 +357,10 @@ def run_smoke_test(target_exe: Path) -> bool:
             return False
 
         ver_text = res_ver.stdout.strip() or res_ver.stderr.strip()
+        expected_ver = get_installer_version()
+        if expected_ver not in ver_text:
+            print(f"[!] Cảnh báo smoke test: Phiên bản binary ({ver_text}) không khớp với bộ cài ({expected_ver})!")
+            return False
         print(f"[+] Smoke test --version OK: {ver_text}")
 
         res_doc = subprocess.run(
@@ -444,11 +487,21 @@ def install(
     old_manifest_bak = install_dir / "install_manifest.json.rollback"
     manifest_file = install_dir / "install_manifest.json"
 
+    lifecycle_dir = install_dir / "lifecycle"
+    lifecycle_dir.mkdir(parents=True, exist_ok=True)
+    lifecycle_exe = lifecycle_dir / "disk-investigator-setup.exe"
+    old_lifecycle_bak = lifecycle_dir / "disk-investigator-setup.exe.rollback"
+
+    uninstaller_cmd = install_dir / "uninstall.cmd"
+    old_uninstaller_bak = install_dir / "uninstall.cmd.rollback"
+
     had_old_exe = target_exe.exists()
     had_old_skill = target_skill.exists()
     had_old_docs = target_docs.exists()
     had_old_ref_docs = target_skill_ref_docs.exists()
     had_old_manifest = manifest_file.exists()
+    had_old_lifecycle = lifecycle_exe.exists()
+    had_old_uninstaller = uninstaller_cmd.exists()
 
     try:
         if had_old_exe:
@@ -461,11 +514,15 @@ def install(
             shutil.copy2(target_skill_ref_docs, old_ref_docs_bak)
         if had_old_manifest:
             shutil.copy2(manifest_file, old_manifest_bak)
+        if had_old_lifecycle:
+            shutil.copy2(lifecycle_exe, old_lifecycle_bak)
+        if had_old_uninstaller:
+            shutil.copy2(uninstaller_cmd, old_uninstaller_bak)
     except Exception as e:
         print(f"[ERROR] Không thể tạo rollback journal: {e}")
         return False
 
-    def perform_rollback(path_added: bool = False) -> None:
+    def perform_rollback(path_changed: bool = False) -> None:
         """Restores previous state and removes partial installations."""
         print("[!] ĐANG THỰC HIỆN ROLLBACK...")
         try:
@@ -494,11 +551,29 @@ def install(
             elif manifest_file.exists():
                 manifest_file.unlink()
 
-            if path_added:
+            if had_old_lifecycle and old_lifecycle_bak.exists():
+                os.replace(str(old_lifecycle_bak), str(lifecycle_exe))
+            elif lifecycle_exe.exists():
+                lifecycle_exe.unlink()
+
+            if had_old_uninstaller and old_uninstaller_bak.exists():
+                os.replace(str(old_uninstaller_bak), str(uninstaller_cmd))
+            elif uninstaller_cmd.exists():
+                uninstaller_cmd.unlink()
+
+            if path_changed:
                 remove_bin_from_user_path(bin_dir)
 
             # Cleanup rollback files
-            for bf in [old_exe_bak, old_skill_bak, old_docs_bak, old_ref_docs_bak, old_manifest_bak]:
+            for bf in [
+                old_exe_bak,
+                old_skill_bak,
+                old_docs_bak,
+                old_ref_docs_bak,
+                old_manifest_bak,
+                old_lifecycle_bak,
+                old_uninstaller_bak,
+            ]:
                 if bf.exists():
                     try:
                         bf.unlink()
@@ -525,11 +600,6 @@ def install(
         shutil.copy2(src_readme, target_skill_ref_docs)
 
         # Deploy lifecycle setup binary for self-contained uninstallation/upgrades
-        lifecycle_dir = install_dir / "lifecycle"
-        lifecycle_dir.mkdir(parents=True, exist_ok=True)
-        lifecycle_exe = lifecycle_dir / "disk-investigator-setup.exe"
-        
-        # Determine current running installer binary
         curr_proc = Path(sys.executable)
         if curr_proc.name.lower() == "disk-investigator-setup.exe" and curr_proc.exists():
             shutil.copy2(curr_proc, lifecycle_exe)
@@ -543,20 +613,21 @@ def install(
         print("[+] Đã cài đặt binary, Skill AI Agent, lifecycle engine và tài liệu kỹ thuật.")
     except Exception as e:
         print(f"[ERROR] Gặp lỗi khi ghi tệp hệ thống: {e}")
-        perform_rollback()
+        perform_rollback(path_changed=False)
         return False
 
     # Step 4: Configure User PATH
     print("[4/6] Cập nhật biến môi trường User PATH (Registry an toàn)...")
-    path_ok = add_bin_to_user_path(bin_dir)
+    path_ok, path_changed = add_bin_to_user_path(bin_dir)
 
     # Step 5: Generate uninstaller & manifest
     print("[5/6] Tạo bộ gỡ cài đặt và ghi nhận Install Manifest...")
     generate_uninstaller_script(install_dir, bin_dir, target_skill)
 
+    current_version = get_installer_version()
     manifest_data: Dict[str, Any] = {
         "app_name": APP_NAME,
-        "version": DEFAULT_VERSION,
+        "version": current_version,
         "installed_at": datetime.datetime.now().astimezone().isoformat(),
         "install_dir": str(install_dir),
         "bin_dir": str(bin_dir),
@@ -577,11 +648,19 @@ def install(
 
     if not smoke_ok:
         print("[ERROR] Smoke test thất bại! Khởi động quy trình hoàn tác (Rollback)...")
-        perform_rollback(path_added=path_ok)
+        perform_rollback(path_changed=path_changed)
         return False
 
     # Clean up rollback journal on success
-    for bf in [old_exe_bak, old_skill_bak, old_docs_bak, old_ref_docs_bak, old_manifest_bak]:
+    for bf in [
+        old_exe_bak,
+        old_skill_bak,
+        old_docs_bak,
+        old_ref_docs_bak,
+        old_manifest_bak,
+        old_lifecycle_bak,
+        old_uninstaller_bak,
+    ]:
         if bf.exists():
             try:
                 bf.unlink()
@@ -712,6 +791,12 @@ def main() -> int:
     parser = argparse.ArgumentParser(
         prog="disk-investigator-setup",
         description=f"1-Click All-in-One Installer for {APP_DISPLAY_NAME}",
+    )
+    parser.add_argument(
+        "--version", "-V",
+        action="version",
+        version=f"%(prog)s {get_installer_version()}",
+        help="Show installer version and exit.",
     )
     parser.add_argument(
         "--silent", "-s",

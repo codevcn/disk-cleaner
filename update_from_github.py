@@ -102,12 +102,15 @@ def check_remote_status() -> Dict[str, Any]:
 
 
 def check_git_origin() -> bool:
-    """Verifies that Git remote origin points to canonical codevcn/disk-cleaner."""
+    """Verifies that Git remote origin strictly points to canonical codevcn/disk-cleaner."""
     res = run_cmd(["git", "remote", "get-url", "origin"])
     if res.returncode != 0:
         return False
     url = res.stdout.strip().lower()
-    return "codevcn/disk-cleaner" in url
+    canonical_pattern = re.compile(
+        r"^(https://github\.com/|git@github\.com:|ssh://git@github\.com/)codevcn/disk-cleaner(\.git)?/?$"
+    )
+    return bool(canonical_pattern.match(url))
 
 
 def compute_sha256(filepath: Path) -> str:
@@ -194,6 +197,8 @@ def update_via_standalone_download(latest_ver: str) -> int:
     """
     Downloads canonical disk-investigator-setup.exe and SHA256SUMS.txt from GitHub Releases,
     verifies SHA-256 checksum cryptographically, and runs silent upgrade.
+    Enforces strict fail-closed security: missing, unparseable, or mismatched checksum
+    hard-aborts the update immediately.
     """
     tag = f"v{latest_ver}"
     base_url = f"https://github.com/{GITHUB_REPO}/releases/download/{tag}"
@@ -208,22 +213,29 @@ def update_via_standalone_download(latest_ver: str) -> int:
         dest_exe = Path(tmp_dir) / "disk-investigator-setup.exe"
         dest_sums = Path(tmp_dir) / "SHA256SUMS.txt"
 
-        # 1. Download checksum manifest
-        expected_sha: Optional[str] = None
+        # 1. Download checksum manifest (MANDATORY, FAIL-CLOSED)
         try:
             req_sum = urllib.request.Request(
                 checksum_url,
                 headers={"User-Agent": "disk-investigator-updater"},
             )
             with urllib.request.urlopen(req_sum, timeout=15) as resp:
-                sums_text = resp.read().decode("utf-8")
+                sums_text = resp.read().decode("utf-8", errors="replace")
                 dest_sums.write_text(sums_text, encoding="utf-8")
-                for line in sums_text.splitlines():
-                    if "disk-investigator-setup.exe" in line:
-                        expected_sha = line.split()[0].strip().lower()
-                        break
         except Exception as e:
-            print(f"[!] Cảnh báo: Không thể tải SHA256SUMS.txt: {e}")
+            print(f"[ERROR] Không thể tải SHA256SUMS.txt từ GitHub Release: {e}")
+            print("[ERROR] Bảo mật: Thiếu checksum manifest. HỦY CẬP NHẬT để bảo vệ hệ thống.")
+            return 1
+
+        # Parse exact SHA-256 pattern: 64 hex characters followed by whitespace and filename
+        sha_pattern = re.compile(r"^([0-9a-fA-F]{64})\s+(?:\*|\s)?disk-investigator-setup\.exe$", re.MULTILINE)
+        match = sha_pattern.search(sums_text)
+        if not match:
+            print("[ERROR] SHA256SUMS.txt không chứa mã băm hợp lệ cho disk-investigator-setup.exe!")
+            print("[ERROR] Bảo mật: HỦY CẬP NHẬT để bảo vệ hệ thống.")
+            return 1
+
+        expected_sha = match.group(1).lower()
 
         # 2. Download installer
         try:
@@ -238,20 +250,19 @@ def update_via_standalone_download(latest_ver: str) -> int:
             print(f"[ERROR] Tải bản cài đặt thất bại: {e}")
             return 1
 
-        # 3. Verify SHA-256 Checksum
+        # 3. Verify SHA-256 Checksum (MANDATORY)
         computed_sha = compute_sha256(dest_exe).lower()
-        if expected_sha:
-            print(f"[*] Kiểm tra SHA-256 Checksum...")
-            print(f"    Kỳ vọng:  {expected_sha}")
-            print(f"    Thực tế:  {computed_sha}")
-            if computed_sha != expected_sha:
-                print("[ERROR] Checksum SHA-256 KHÔNG KHỚP! Bản cài đặt có thể bị lỗi hoặc can thiệp.")
-                print("[ERROR] HỦY CẬP NHẬT để bảo vệ an toàn hệ thống.")
-                return 1
-            print("[+] Checksum SHA-256 khớp 100% (Tính toàn vẹn bảo đảm).")
+        print(f"[*] Kiểm tra SHA-256 Checksum...")
+        print(f"    Kỳ vọng:  {expected_sha}")
+        print(f"    Thực tế:  {computed_sha}")
+        if computed_sha != expected_sha:
+            print("[ERROR] Checksum SHA-256 KHÔNG KHỚP! Bản cài đặt có thể bị lỗi hoặc can thiệp.")
+            print("[ERROR] HỦY CẬP NHẬT để bảo vệ an toàn hệ thống.")
+            return 1
+        print("[+] Checksum SHA-256 khớp 100% (Tính toàn vẹn bảo đảm).")
 
         print("[*] Tiến hành chạy cài đặt tự động...")
-        run_res = subprocess.run([str(dest_exe), "--silent"], capture_output=True, text=True)
+        run_res = subprocess.run([str(dest_exe), "--silent"], capture_output=True, text=True, encoding="utf-8", errors="replace")
         if run_res.returncode == 0:
             print("[+] Cập nhật thành công!")
             clear_update_cache()

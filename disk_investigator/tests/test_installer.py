@@ -68,8 +68,9 @@ class TestInstaller(unittest.TestCase):
         mock_query_val.return_value = (r"C:\Tools;C:\Users\dell\bin", 2)  # 2 is REG_EXPAND_SZ
         target_bin = Path(r"C:\Users\dell\AppData\Local\DiskInvestigator\bin")
 
-        res = installer.add_bin_to_user_path(target_bin)
-        self.assertTrue(res)
+        success, changed = installer.add_bin_to_user_path(target_bin)
+        self.assertTrue(success)
+        self.assertTrue(changed)
         mock_set_val.assert_called_once()
         args, kwargs = mock_set_val.call_args
         # Key is args[0], ValueName is args[1], Reserved is args[2], Type is args[3], Value is args[4]
@@ -90,8 +91,9 @@ class TestInstaller(unittest.TestCase):
             2,
         )
 
-        res = installer.add_bin_to_user_path(target_bin)
-        self.assertTrue(res)
+        success, changed = installer.add_bin_to_user_path(target_bin)
+        self.assertTrue(success)
+        self.assertFalse(changed)
         mock_set_val.assert_not_called()
         mock_broadcast.assert_not_called()
 
@@ -129,19 +131,34 @@ class TestInstaller(unittest.TestCase):
         self.assertIn("GỠ BỎ CÀI ĐẶT", content)
         self.assertIn("DiskInvestigator", content)
 
+    @patch("installer.get_resource_path")
     @patch("installer.get_target_directories")
     @patch("installer.add_bin_to_user_path")
     @patch("installer.run_smoke_test")
     def test_install_skill_backup_on_user_modification(
-        self, mock_smoke, mock_add_path, mock_get_dirs
+        self, mock_smoke, mock_add_path, mock_get_dirs, mock_resource
     ):
         # Setup simulated directories
         inst_dir = self.test_root / "install"
         bin_dir = inst_dir / "bin"
         skill_dir = self.test_root / "skill"
         skill_ref_dir = skill_dir / "references"
+        payload_dir = self.test_root / "payload"
+        payload_dir.mkdir(parents=True, exist_ok=True)
+
+        src_exe = payload_dir / "disk_investigator.exe"
+        src_exe.write_text("MOCK BINARY", encoding="utf-8")
+        src_skill = payload_dir / "SKILL.md"
+        src_skill.write_text("MOCK NEW SKILL", encoding="utf-8")
+        src_readme = payload_dir / "README.md"
+        src_readme.write_text("MOCK README", encoding="utf-8")
+
+        def fake_resource(name):
+            return payload_dir / name
+
+        mock_resource.side_effect = fake_resource
         mock_get_dirs.return_value = (inst_dir, bin_dir, skill_dir, skill_ref_dir)
-        mock_add_path.return_value = True
+        mock_add_path.return_value = (True, True)
         mock_smoke.return_value = True
 
         # Pre-create an existing user-customized skill and previous manifest
@@ -151,7 +168,6 @@ class TestInstaller(unittest.TestCase):
 
         custom_skill = skill_dir / "SKILL.md"
         custom_skill.write_text("USER CUSTOM CONTENT THAT MUST NOT BE LOST", encoding="utf-8")
-        custom_hash = installer.compute_sha256(custom_skill)
 
         # Previous manifest recorded a DIFFERENT hash (e.g. original default)
         prev_manifest = {
@@ -173,19 +189,32 @@ class TestInstaller(unittest.TestCase):
             "USER CUSTOM CONTENT THAT MUST NOT BE LOST",
         )
 
+    @patch("installer.get_resource_path")
     @patch("installer.get_target_directories")
     @patch("installer.add_bin_to_user_path")
     @patch("installer.remove_bin_from_user_path")
     @patch("installer.run_smoke_test")
-    def test_install_rollback_on_smoke_failure(
-        self, mock_smoke, mock_remove_path, mock_add_path, mock_get_dirs
+    def test_install_rollback_on_smoke_failure_path_newly_added(
+        self, mock_smoke, mock_remove_path, mock_add_path, mock_get_dirs, mock_resource
     ):
         inst_dir = self.test_root / "install"
         bin_dir = inst_dir / "bin"
         skill_dir = self.test_root / "skill"
         skill_ref_dir = skill_dir / "references"
+        payload_dir = self.test_root / "payload"
+        payload_dir.mkdir(parents=True, exist_ok=True)
+
+        src_exe = payload_dir / "disk_investigator.exe"
+        src_exe.write_text("MOCK BINARY", encoding="utf-8")
+        src_skill = payload_dir / "SKILL.md"
+        src_skill.write_text("MOCK SKILL", encoding="utf-8")
+        src_readme = payload_dir / "README.md"
+        src_readme.write_text("MOCK README", encoding="utf-8")
+
+        mock_resource.side_effect = lambda name: payload_dir / name
         mock_get_dirs.return_value = (inst_dir, bin_dir, skill_dir, skill_ref_dir)
-        mock_add_path.return_value = True
+        # PATH was newly added during this install (changed=True)
+        mock_add_path.return_value = (True, True)
         mock_remove_path.return_value = True
         # Smoke test fails!
         mock_smoke.return_value = False
@@ -205,8 +234,52 @@ class TestInstaller(unittest.TestCase):
         # Previous working exe must be restored by rollback
         self.assertTrue(old_exe.exists())
         self.assertEqual(old_exe.read_text(encoding="utf-8"), "PREVIOUS WORKING EXE")
-        # PATH removal must have been called
+        # PATH removal must have been called since path was changed during install
         mock_remove_path.assert_called_with(bin_dir)
+
+    @patch("installer.get_resource_path")
+    @patch("installer.get_target_directories")
+    @patch("installer.add_bin_to_user_path")
+    @patch("installer.remove_bin_from_user_path")
+    @patch("installer.run_smoke_test")
+    def test_install_rollback_on_smoke_failure_path_already_present(
+        self, mock_smoke, mock_remove_path, mock_add_path, mock_get_dirs, mock_resource
+    ):
+        inst_dir = self.test_root / "install"
+        bin_dir = inst_dir / "bin"
+        skill_dir = self.test_root / "skill"
+        skill_ref_dir = skill_dir / "references"
+        payload_dir = self.test_root / "payload"
+        payload_dir.mkdir(parents=True, exist_ok=True)
+
+        src_exe = payload_dir / "disk_investigator.exe"
+        src_exe.write_text("MOCK BINARY", encoding="utf-8")
+        src_skill = payload_dir / "SKILL.md"
+        src_skill.write_text("MOCK SKILL", encoding="utf-8")
+        src_readme = payload_dir / "README.md"
+        src_readme.write_text("MOCK README", encoding="utf-8")
+
+        mock_resource.side_effect = lambda name: payload_dir / name
+        mock_get_dirs.return_value = (inst_dir, bin_dir, skill_dir, skill_ref_dir)
+        # PATH was ALREADY present before this install (changed=False)
+        mock_add_path.return_value = (True, False)
+        mock_remove_path.return_value = True
+        mock_smoke.return_value = False
+
+        inst_dir.mkdir(parents=True, exist_ok=True)
+        bin_dir.mkdir(parents=True, exist_ok=True)
+        skill_dir.mkdir(parents=True, exist_ok=True)
+        skill_ref_dir.mkdir(parents=True, exist_ok=True)
+
+        old_exe = bin_dir / "disk_investigator.exe"
+        old_exe.write_text("PREVIOUS WORKING EXE", encoding="utf-8")
+
+        # Install should fail and return False
+        ok = installer.install(silent=True)
+        self.assertFalse(ok)
+
+        # PATH removal must NOT be called since path pre-existed!
+        mock_remove_path.assert_not_called()
 
 
 if __name__ == "__main__":
