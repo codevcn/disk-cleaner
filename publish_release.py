@@ -36,6 +36,7 @@ if sys.platform == "win32":
 ROOT_DIR = Path(__file__).resolve().parent
 INIT_FILE = ROOT_DIR / "disk_investigator" / "__init__.py"
 TARGET_EXE = ROOT_DIR / "disk_investigator.exe"
+TARGET_SETUP_EXE = ROOT_DIR / "disk-investigator-setup.exe"
 GITHUB_REPO = "codevcn/disk-cleaner"
 
 
@@ -65,7 +66,7 @@ def get_current_version() -> str:
                     parts = line.split("=")
                     if len(parts) == 2:
                         return parts[1].strip().strip('"').strip("'")
-    return "2.0.3"
+    return "2.1.0"
 
 
 def bump_version(current: str, bump_type: str = "patch") -> str:
@@ -106,13 +107,13 @@ def update_version_in_init(new_version: str) -> bool:
 
 
 def check_prerequisites() -> Tuple[bool, str]:
-    """Verifies Git and GitHub CLI availability and auth status."""
-    # Check git
+    """Verifies Git and GitHub CLI availability, clean tree, and auth status."""
+    # Check git work tree
     git_check = run_cmd(["git", "rev-parse", "--is-inside-work-tree"])
     if git_check.returncode != 0:
         return False, "Not inside a valid Git repository."
 
-    # Check gh
+    # Check gh auth
     gh_check = run_cmd(["gh", "auth", "status"])
     if gh_check.returncode != 0:
         return False, f"GitHub CLI is not authenticated. Error: {gh_check.stderr.strip()}"
@@ -134,18 +135,27 @@ def run_tests() -> bool:
         return False
 
 
-def build_binary(version: str) -> bool:
-    """Invokes build_exe.py to package the standalone binary."""
-    print(f"[*] Packaging disk_investigator.exe for v{version}...")
-    res = run_cmd([sys.executable, "build_exe.py", "--version", version])
-    if res.returncode == 0:
-        print("[+] Binary compiled and verified successfully.")
-        return True
-    else:
-        print(f"[ERROR] Build packaging failed with code {res.returncode}")
-        print(res.stdout)
-        print(res.stderr)
+def build_binaries(version: str) -> bool:
+    """Packages both disk_investigator.exe and canonical disk-investigator-setup.exe."""
+    print(f"[*] [1/2] Compiling standalone CLI: disk_investigator.exe for v{version}...")
+    res_bin = run_cmd([sys.executable, "build_exe.py", "--version", version])
+    if res_bin.returncode != 0:
+        print(f"[ERROR] Build packaging failed for disk_investigator.exe: code {res_bin.returncode}")
+        print(res_bin.stdout)
+        print(res_bin.stderr)
         return False
+    print("[+] disk_investigator.exe compiled and verified successfully.")
+
+    print(f"[*] [2/2] Packaging 1-Click All-in-One Installer: disk-investigator-setup.exe...")
+    res_setup = run_cmd([sys.executable, "build_installer.py"])
+    if res_setup.returncode != 0:
+        print(f"[ERROR] Installer packaging failed for disk-investigator-setup.exe: code {res_setup.returncode}")
+        print(res_setup.stdout)
+        print(res_setup.stderr)
+        return False
+    print("[+] disk-investigator-setup.exe packaged and verified successfully.")
+
+    return True
 
 
 def publish_release(
@@ -163,14 +173,24 @@ def publish_release(
     print(f"Repository:    https://github.com/{GITHUB_REPO}")
     print(f"Target Tag:    {tag_name}")
     print(f"Release Title: {release_title}")
+    print(f"Canonical:     {TARGET_SETUP_EXE.name}")
+    print(f"Portable:      {TARGET_EXE.name}")
     print(f"Dry Run:       {dry_run}")
     print(f"=======================================================\n")
+
+    # Invariant: Releases are immutable. Hard abort if tag already exists on GitHub
+    view_res = run_cmd(["gh", "release", "view", tag_name])
+    if view_res.returncode == 0:
+        print(f"[ERROR] Release {tag_name} already exists on GitHub!")
+        print("[ERROR] Invariant Violation: Releases are immutable and must not be overwritten.")
+        print("[ERROR] Please bump the version number (e.g. --bump-patch or --bump-minor) and retry.")
+        return False
 
     if dry_run:
         print("[DRY-RUN] Step 1: Would stage all files with 'git add .'")
         print(f"[DRY-RUN] Step 2: Would commit with message: 'release: {release_title}'")
         print("[DRY-RUN] Step 3: Would push commits with 'git push origin main'")
-        print(f"[DRY-RUN] Step 4: Would publish release '{tag_name}' with attached asset '{TARGET_EXE.name}'")
+        print(f"[DRY-RUN] Step 4: Would publish release '{tag_name}' with assets '{TARGET_SETUP_EXE.name}' and '{TARGET_EXE.name}'")
         print("[DRY-RUN] Success (simulation complete).")
         return True
 
@@ -178,7 +198,6 @@ def publish_release(
     print("[1/4] Staging and committing changes to Git...")
     run_cmd(["git", "add", "."])
 
-    # Check if there are changes to commit
     diff_check = run_cmd(["git", "status", "--porcelain"])
     if diff_check.stdout.strip():
         commit_res = run_cmd(["git", "commit", "-m", f"release: {release_title}"])
@@ -197,48 +216,52 @@ def publish_release(
         return False
     print("[+] Pushed commits to origin/main.")
 
-    # 3. Create or Update GitHub Release
-    print(f"[3/4] Publishing GitHub Release {tag_name} with executable asset...")
+    # 3. Create Immutable GitHub Release with both assets
+    print(f"[3/4] Publishing GitHub Release {tag_name} with canonical setup and portable binaries...")
+    if not TARGET_SETUP_EXE.exists():
+        print(f"[ERROR] Canonical asset '{TARGET_SETUP_EXE.name}' not found for upload.")
+        return False
     if not TARGET_EXE.exists():
-        print(f"[ERROR] Binary '{TARGET_EXE.name}' not found for upload.")
+        print(f"[ERROR] Portable binary '{TARGET_EXE.name}' not found for upload.")
         return False
 
-    # Check if release tag already exists
-    view_res = run_cmd(["gh", "release", "view", tag_name])
-    if view_res.returncode == 0:
-        print(f"[*] Release {tag_name} already exists. Updating release asset...")
-        upload_res = run_cmd(["gh", "release", "upload", tag_name, str(TARGET_EXE), "--clobber"])
-        if upload_res.returncode != 0:
-            print(f"[ERROR] Failed to upload asset: {upload_res.stderr.strip()}")
-            return False
-        print(f"[+] Asset {TARGET_EXE.name} updated on release {tag_name}.")
-    else:
-        # Create fresh release
-        create_res = run_cmd([
-            "gh", "release", "create", tag_name, str(TARGET_EXE),
-            "--title", release_title,
-            "--notes", f"Release {tag_name}: {release_notes}\n\nAutomated production build for Windows 11.",
-        ])
-        if create_res.returncode != 0:
-            print(f"[ERROR] Failed to create GitHub release: {create_res.stderr.strip()}")
-            return False
-        print(f"[+] GitHub Release {tag_name} published successfully!")
+    create_res = run_cmd([
+        "gh", "release", "create", tag_name,
+        str(TARGET_SETUP_EXE),
+        str(TARGET_EXE),
+        "--title", release_title,
+        "--notes", (
+            f"## Release {tag_name}: {release_notes}\n\n"
+            f"### Assets:\n"
+            f"- **`disk-investigator-setup.exe`** (Recommended): 1-Click All-in-One Installer for Windows 11. "
+            f"Automatically configures binary in LocalAppData, adds to User PATH, and sets up Google Antigravity Agent Skill.\n"
+            f"- **`disk_investigator.exe`**: Standalone portable single-file binary for advanced users.\n\n"
+            f"Production build verified with 59 automated unit & destructive tests."
+        ),
+    ])
+    if create_res.returncode != 0:
+        print(f"[ERROR] Failed to create GitHub release: {create_res.stderr.strip()}")
+        return False
+    print(f"[+] GitHub Release {tag_name} published successfully!")
 
     # 4. Invalidate local update cache
     print("[4/4] Finalizing deployment...")
-    cache_file = ROOT_DIR / ".investigation_cache" / "update_status.json"
-    if cache_file.exists():
-        try:
-            cache_file.unlink()
-        except Exception:
-            pass
+    local_app_data = os.environ.get("LOCALAPPDATA")
+    if local_app_data:
+        cache_file = Path(local_app_data) / "DiskInvestigator" / "updates" / "update_status.json"
+        if cache_file.exists():
+            try:
+                cache_file.unlink()
+            except Exception:
+                pass
 
     release_url = f"https://github.com/{GITHUB_REPO}/releases/tag/{tag_name}"
     print("\n=======================================================")
     print("           RELEASE PUBLISHED SUCCESSFULLY!             ")
-    print(f" Version:  {tag_name}")
-    print(f" URL:      {release_url}")
-    print(f" Binary:   {TARGET_EXE.name}")
+    print(f" Version:    {tag_name}")
+    print(f" URL:        {release_url}")
+    print(f" Canonical:  {TARGET_SETUP_EXE.name}")
+    print(f" Portable:   {TARGET_EXE.name}")
     print("=======================================================\n")
     return True
 
@@ -315,9 +338,9 @@ def main() -> int:
         if not run_tests():
             return 1
 
-    # Step 4: Build Executable
+    # Step 4: Build Executables (CLI Binary + 1-Click Setup)
     if not args.dry_run:
-        if not build_binary(target_ver):
+        if not build_binaries(target_ver):
             return 1
 
     # Step 5: Publish Release

@@ -13,6 +13,7 @@ import json
 import os
 import re
 import sys
+import tempfile
 import time
 import urllib.request
 from pathlib import Path
@@ -25,12 +26,15 @@ REQUEST_TIMEOUT_SECONDS = 2.0
 
 def parse_semver(ver_str: str) -> Tuple[int, ...]:
     """Extracts numeric semver tuple from string like 'v2.0.3' -> (2, 0, 3)."""
-    cleaned = re.sub(r"^[^\d]*", "", ver_str.strip())
+    cleaned = re.sub(r"^[^\d]*", "", str(ver_str).strip())
     numbers = []
     for part in cleaned.split("."):
         try:
-            num = int(re.match(r"^\d+", part).group(0))  # type: ignore
-            numbers.append(num)
+            match = re.match(r"^\d+", part)
+            if match:
+                numbers.append(int(match.group(0)))
+            else:
+                numbers.append(0)
         except Exception:
             numbers.append(0)
     while len(numbers) < 3:
@@ -39,15 +43,34 @@ def parse_semver(ver_str: str) -> Tuple[int, ...]:
 
 
 def _get_cache_path() -> Path:
-    """Returns path to cached update status."""
-    cache_dir = Path.cwd() / ".investigation_cache"
-    if not cache_dir.exists():
-        try:
-            cache_dir.mkdir(parents=True, exist_ok=True)
-        except Exception:
-            # Fallback to user temp
-            return Path(os.environ.get("TEMP", ".")) / "disk_investigator_update.json"
-    return cache_dir / "update_status.json"
+    """
+    Returns path to cached update status in %LOCALAPPDATA%\\DiskInvestigator\\updates.
+    Never creates cache files in the current working directory to preserve read-only scans.
+    """
+    local_app_data = os.environ.get("LOCALAPPDATA")
+    if local_app_data:
+        base_dir = Path(local_app_data) / "DiskInvestigator" / "updates"
+    else:
+        base_dir = Path(tempfile.gettempdir()) / "DiskInvestigator" / "updates"
+    return base_dir / "update_status.json"
+
+
+def _is_valid_cache(data: Any, expected_repo: str) -> bool:
+    """Validates structure, provenance, and timestamp sanity of cache payload."""
+    if not isinstance(data, dict):
+        return False
+    if data.get("repo") != expected_repo:
+        return False
+    checked_at = data.get("checked_at")
+    if not isinstance(checked_at, (int, float)):
+        return False
+    now = time.time()
+    if checked_at <= 0 or checked_at > now + 3600:
+        return False
+    latest_ver = data.get("latest_version")
+    if not isinstance(latest_ver, str) or not latest_ver.strip():
+        return False
+    return True
 
 
 def check_for_updates(
@@ -57,8 +80,8 @@ def check_for_updates(
     timeout: float = REQUEST_TIMEOUT_SECONDS,
 ) -> Dict[str, Any]:
     """
-    Checks GitHub for the latest release/tag.
-    Uses cached result if available and fresh.
+    Checks GitHub for the latest release/tag via official Releases API.
+    Uses cached result if available, valid, and fresh.
     Fails safely without raising exceptions on network errors.
     """
     cache_file = _get_cache_path()
@@ -68,10 +91,11 @@ def check_for_updates(
     if not force and cache_file.exists():
         try:
             with open(cache_file, "r", encoding="utf-8") as f:
-                data = json.load(f)
-                checked_at = data.get("checked_at", 0)
-                if now - checked_at < CACHE_TTL_SECONDS:
-                    return data
+                cached_data = json.load(f)
+                if _is_valid_cache(cached_data, repo):
+                    checked_at = cached_data["checked_at"]
+                    if now - checked_at < CACHE_TTL_SECONDS:
+                        return cached_data
         except Exception:
             pass
 
@@ -87,7 +111,7 @@ def check_for_updates(
     }
 
     try:
-        # Step 1: Query GitHub Releases API
+        # Step 1: Query GitHub Releases API (Immutable release provenance)
         api_url = f"https://api.github.com/repos/{repo}/releases/latest"
         req = urllib.request.Request(
             api_url,
@@ -115,37 +139,20 @@ def check_for_updates(
                             f"Phiên bản mới v{latest_ver} đã có trên GitHub (hiện tại: v{current_version})."
                         )
                         result["update_instruction"] = (
-                            "Nhờ AI Agent chạy 'python update_from_github.py' hoặc chạy 'update.cmd' để cập nhật."
+                            f"Tải bản cài đặt mới tại: {html_url} hoặc chạy 'update.cmd' để cập nhật."
                         )
-    except Exception as e:
-        # Step 2: Fallback to raw __init__.py if release query fails
-        try:
-            raw_url = f"https://raw.githubusercontent.com/{repo}/main/disk_investigator/__init__.py"
-            req = urllib.request.Request(raw_url, headers={"User-Agent": "disk-investigator"})
-            with urllib.request.urlopen(req, timeout=timeout) as resp:
-                if resp.status == 200:
-                    text = resp.read().decode("utf-8")
-                    match = re.search(r'__version__\s*=\s*["\']([^"\']+)["\']', text)
-                    if match:
-                        latest_ver = match.group(1).strip()
-                        result["latest_version"] = latest_ver
-                        if parse_semver(latest_ver) > parse_semver(current_version):
-                            result["update_available"] = True
-                            result["message"] = (
-                                f"Phiên bản mới v{latest_ver} đã có trên GitHub (hiện tại: v{current_version})."
-                            )
-                            result["update_instruction"] = (
-                                "Nhờ AI Agent chạy 'python update_from_github.py' hoặc chạy 'update.cmd' để cập nhật."
-                            )
-        except Exception:
-            result["status"] = "offline_or_failed"
-            result["message"] = "Không thể kiểm tra cập nhật (offline hoặc mạng giới hạn)."
+    except Exception:
+        # Fail closed safely on network issues without unpinned raw fallback
+        result["status"] = "offline_or_failed"
+        result["message"] = "Không thể kiểm tra cập nhật (offline hoặc mạng giới hạn)."
 
-    # Save to cache
+    # Step 2: Atomic write to cache
     try:
         cache_file.parent.mkdir(parents=True, exist_ok=True)
-        with open(cache_file, "w", encoding="utf-8") as f:
+        tmp_file = cache_file.with_suffix(".tmp")
+        with open(tmp_file, "w", encoding="utf-8") as f:
             json.dump(result, f, indent=2, ensure_ascii=False)
+        os.replace(str(tmp_file), str(cache_file))
     except Exception:
         pass
 
@@ -161,10 +168,11 @@ def notify_if_update_available(current_version: str, repo: str = GITHUB_REPO) ->
         info = check_for_updates(current_version=current_version, repo=repo, force=False)
         if info.get("update_available"):
             latest = info.get("latest_version")
+            rel_url = info.get("release_url", f"https://github.com/{repo}/releases/latest")
             msg = (
                 f"\n[🔔 UPDATE AVAILABLE] Phiên bản mới v{latest} đã có trên GitHub (hiện tại: v{current_version})!\n"
-                f"    -> Nhờ AI Agent chạy: python update_from_github.py\n"
-                f"    -> Hoặc chạy file: update.cmd\n"
+                f"    -> Tải bản cài đặt mới nhất: {rel_url}\n"
+                f"    -> Hoặc chạy file: update.cmd (hoặc 'python update_from_github.py')\n"
             )
             sys.stderr.write(msg)
             sys.stderr.flush()

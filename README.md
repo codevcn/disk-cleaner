@@ -118,54 +118,70 @@ No raw permanent deletion (`rmdir /s /q` or `Remove-Item -Force`) is ever perfor
 
 ---
 
-## Dual Distribution Options
+## Distribution Options
 
-Disk Investigator can be operated interchangeably in two modes:
+Disk Investigator provides three tailored distribution methods:
 
-| Mode | Command Invocation | Dependencies | Use Case |
+| Distribution | File / Command | Target User / Audience | Setup Experience |
 | :--- | :--- | :--- | :--- |
-| **Standalone Portable EXE** | `.\disk_investigator.exe <command>` | None (self-contained Windows binary) | Plug-and-play, portable distributions, air-gapped systems |
-| **Python Package** | `python -m disk_investigator <command>` | Python 3.12+ | Development, local debugging, test runner |
+| **1-Click All-in-One Installer (Canonical)** | `disk-investigator-setup.exe` | **End-users & AI Agents** | **Zero dependencies, single file**. Installs binary to `%LOCALAPPDATA%\DiskInvestigator\bin`, configures User `PATH` safely via Registry (`winreg`), installs Antigravity Skill (`SKILL.md`), and provides `uninstall.cmd`. |
+| **Standalone Portable EXE** | `.\disk_investigator.exe <command>` | **Advanced CLI Users** | Portable single binary. Zero runtime dependencies. Perfect for portable USB drives or air-gapped systems. |
+| **Python Developer Package** | `python -m disk_investigator <command>` | **Developers & CI/CD** | Full source code with 59 automated unit and destructive tests. |
 
-Both modes share the exact same JSON schema, command arguments, and security policies.
+---
+
+## 1-Click All-in-One Installer (`disk-investigator-setup.exe`)
+
+For end-users who just want to download a single file and immediately have full capabilities:
+
+### Installation
+1. Download **`disk-investigator-setup.exe`** from [GitHub Releases](https://github.com/codevcn/disk-cleaner/releases/latest).
+2. Double-click or run from CMD/PowerShell:
+   ```cmd
+   disk-investigator-setup.exe
+   ```
+   *(Or run silently in background: `disk-investigator-setup.exe --silent`)*
+
+### What the Installer Does Automatically:
+- **Deploys Standalone Binary**: Installs `disk_investigator.exe` to `%LOCALAPPDATA%\DiskInvestigator\bin\`.
+- **Configures User PATH (Registry Safe)**: Safely appends the binary directory to `HKCU\Environment\Path` using Python `winreg` and broadcasts `WM_SETTINGCHANGE`. Never uses `setx`, completely avoiding Windows 1024-character truncation bugs.
+- **Deploys Antigravity AI Agent Skill**: Automatically copies `SKILL.md` to `%USERPROFILE%\.gemini\config\skills\disk-cleanup\SKILL.md`. If the user previously customized this skill, it automatically creates a safe backup (`SKILL.md.user-backup-<timestamp>`) before updating.
+- **Deploys Reference Documentation**: Places technical documentation at `%LOCALAPPDATA%\DiskInvestigator\README.md` and `%USERPROFILE%\.gemini\config\skills\disk-cleanup\references\README.md` for AI Agent in-depth context.
+- **Auditable Manifest**: Generates `%LOCALAPPDATA%\DiskInvestigator\install_manifest.json` with cryptographic SHA-256 hashes of all deployed files.
+- **Automated Smoke Test**: Runs `disk_investigator --version` and `doctor` to verify readiness.
+
+### Uninstallation
+To cleanly remove Disk Investigator from your system:
+- Run `%LOCALAPPDATA%\DiskInvestigator\uninstall.cmd`
+- Or run: `disk-investigator-setup.exe --uninstall`
+- To also remove cached scans and history: `disk-investigator-setup.exe --uninstall --purge-data`
+*(Note: If you customized your `SKILL.md`, the uninstaller automatically detects the difference and preserves your customized skill!)*
 
 ---
 
 ## Standalone Executable Packaging
 
-Disk Investigator includes an automated packaging pipeline that compiles the full application into a single, high-performance `.exe` binary located directly in the project root.
+Disk Investigator includes an automated packaging pipeline that compiles the full application into standalone Windows executables:
 
 ### One-Click Build (`build.cmd`)
 
-For quick, hands-free building on Windows, run `build.cmd` directly from PowerShell, Command Prompt, or by double-clicking in File Explorer:
+For quick, hands-free building on Windows, run `build.cmd`:
 
 ```cmd
 build.cmd
 ```
 
 `build.cmd` automatically:
-1. Detects the Python 3.12+ installation (`D:\Python-3-12\python.exe` or system PATH).
-2. Verifies whether `PyInstaller` is available (and installs it via pip if missing).
-3. Executes `build_exe.py`.
-4. Returns proper exit codes for automated CI/CD and script harnesses.
+1. Detects Python 3.12+ (`D:\Python-3-12\python.exe` or system PATH).
+2. Verifies PyInstaller is installed.
+3. Compiles `disk_investigator.exe` via `build_exe.py`.
+4. Compiles the canonical 1-Click installer `disk-investigator-setup.exe` via `build_installer.py`.
+5. Enforces transactional builds and post-compilation quality gates.
 
-### Python Packaging Script (`build_exe.py`)
-
-You can also run the packaging script directly via Python:
-
-```bash
-# Build standalone binary
-python build_exe.py
-
-# Display build history manifest
-python build_exe.py --history
-
-# Clean up root executable and temporary files
-python build_exe.py --clean-only
-
-# Override version tag
-python build_exe.py --version 2.0.4
-```
+### Packaging Scripts
+- **`build_exe.py`**: Compiles standalone CLI binary `disk_investigator.exe` and updates `build_history.json`.
+- **`build_installer.py`**: Packages `installer.py` embedding `disk_investigator.exe`, `SKILL.md`, and `README.md` into `disk-investigator-setup.exe`.
+- **`publish.cmd` / `publish_release.py`**: Verifies quality gate tests, checks clean git tree, enforces immutable releases (hard abort if tag exists), and publishes both assets to GitHub Releases.
 
 ### Single-Executable Invariant & Build History (`build_history.json`)
 

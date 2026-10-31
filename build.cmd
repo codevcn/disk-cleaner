@@ -59,7 +59,7 @@ if %ERRORLEVEL% neq 0 (
 echo.
 
 :: 3. Execute build_exe.py with all passed arguments
-echo [*] Running build_exe.py...
+echo [*] [1/2] Compiling disk_investigator.exe...
 %PYTHON_BIN% "%~dp0build_exe.py" %*
 set "BUILD_EXIT_CODE=%ERRORLEVEL%"
 
@@ -70,5 +70,18 @@ if %BUILD_EXIT_CODE% neq 0 (
 )
 
 echo.
-echo [SUCCESS] Standalone disk_investigator.exe is ready in project root!
+echo [*] [2/2] Packaging disk-investigator-setup.exe...
+%PYTHON_BIN% "%~dp0build_installer.py"
+set "SETUP_EXIT_CODE=%ERRORLEVEL%"
+
+if %SETUP_EXIT_CODE% neq 0 (
+    echo.
+    echo [ERROR] Installer packaging failed with exit code %SETUP_EXIT_CODE%.
+    exit /b %SETUP_EXIT_CODE%
+)
+
+echo.
+echo [SUCCESS] Both standalone binary and 1-Click Setup EXE are ready in project root:
+echo   - disk_investigator.exe
+echo   - disk-investigator-setup.exe
 exit /b 0

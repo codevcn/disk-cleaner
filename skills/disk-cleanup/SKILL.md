@@ -35,13 +35,16 @@ This skill turns Antigravity into an **Autonomous Disk Space Investigator & Safe
 
 ## 2. CLI Interface
 
-The underlying harness can be executed directly via the standalone binary `.\disk_investigator.exe` or via Python `python -m disk_investigator` from `d:\D-Personal\disk-cleaner`.
+The underlying harness can be executed directly as a global command on Windows 11 after running the 1-Click Setup (`disk-investigator-setup.exe`), or directly via the standalone binary `.\disk_investigator.exe` / Python `python -m disk_investigator`.
 
 ```bash
-# Using standalone executable (Preferred, zero dependencies):
+# Global command (Installed via disk-investigator-setup.exe):
+disk_investigator <command>
+
+# Or using local standalone executable:
 .\disk_investigator.exe <command>
 
-# Or using Python module:
+# Or using Python module from repository:
 python -m disk_investigator <command>
 ```
 

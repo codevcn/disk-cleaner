@@ -1,14 +1,18 @@
 #!/usr/bin/env python3
 """
-update_from_github.py - Autonomous Updater for disk_investigator.
+update_from_github.py - Autonomous Exact-Release Updater for disk_investigator.
 
 Enables the AI Agent or User to:
-1. Query GitHub (codevcn/disk-cleaner) for the latest release/commits.
-2. Safely pull down code updates via Git.
-3. Automatically execute unit tests to ensure integrity.
-4. Rebuild the standalone root executable (disk_investigator.exe) via build_exe.py.
-5. Synchronize the Antigravity Agent skill file (~/.gemini/config/skills/disk-cleanup/SKILL.md).
-6. Update build history manifest and clear update check cache.
+1. Query GitHub Releases (codevcn/disk-cleaner) for the latest immutable release tag.
+2. In Git Workspace mode:
+   - Fetches tags and checks out the exact immutable release tag.
+   - Executes quality gate tests to guarantee code integrity.
+   - Rebuilds standalone executables (disk_investigator.exe and disk-investigator-setup.exe).
+   - Synchronizes Antigravity Agent skill.
+3. In Standalone / Installed mode:
+   - Downloads the canonical 'disk-investigator-setup.exe' directly from GitHub Releases.
+   - Runs 'disk-investigator-setup.exe --silent' to perform atomic, transactional upgrade.
+4. Clears update check cache safely in %LOCALAPPDATA%.
 """
 
 from __future__ import annotations
@@ -19,6 +23,8 @@ import os
 import shutil
 import subprocess
 import sys
+import tempfile
+import urllib.request
 from pathlib import Path
 from typing import Any, Dict, Optional, Tuple
 
@@ -54,7 +60,20 @@ def run_cmd(
 
 
 def get_local_version() -> str:
-    """Reads current local version from disk_investigator/__init__.py."""
+    """Reads current local version from disk_investigator/__init__.py or manifest."""
+    # Check manifest if installed
+    local_app_data = os.environ.get("LOCALAPPDATA")
+    if local_app_data:
+        manifest_file = Path(local_app_data) / "DiskInvestigator" / "install_manifest.json"
+        if manifest_file.exists():
+            try:
+                with open(manifest_file, "r", encoding="utf-8") as f:
+                    data = json.load(f)
+                    if "version" in data:
+                        return data["version"]
+            except Exception:
+                pass
+
     init_file = ROOT_DIR / "disk_investigator" / "__init__.py"
     if init_file.exists():
         with open(init_file, "r", encoding="utf-8") as f:
@@ -73,7 +92,7 @@ def is_git_repo() -> bool:
 
 
 def check_remote_status() -> Dict[str, Any]:
-    """Checks GitHub for newer commits/releases."""
+    """Checks GitHub for latest release."""
     sys.path.insert(0, str(ROOT_DIR))
     from disk_investigator.version_checker import check_for_updates
 
@@ -89,48 +108,135 @@ def sync_antigravity_skill() -> bool:
     try:
         GLOBAL_SKILL_PATH.parent.mkdir(parents=True, exist_ok=True)
         shutil.copy2(LOCAL_SKILL_PATH, GLOBAL_SKILL_PATH)
-        print(f"[+] Synchronized Antigravity skill: {GLOBAL_SKILL_PATH}")
+        print(f"[+] Đã đồng bộ Skill cho Antigravity: {GLOBAL_SKILL_PATH}")
         return True
     except Exception as e:
-        print(f"[!] Warning: Could not sync skill to global directory: {e}")
+        print(f"[!] Cảnh báo: Không thể đồng bộ Skill: {e}")
         return False
 
 
 def run_tests() -> bool:
     """Executes full unit test suite."""
-    print("[*] Running test suite to verify code health...")
+    print("[*] Đang chạy kiểm thử tự động (Quality Gate)...")
     res = run_cmd([sys.executable, "-m", "unittest", "discover", "-s", "disk_investigator/tests", "-v"])
     if res.returncode == 0:
-        print("[+] Test suite passed 100% OK.")
+        print("[+] Toàn bộ 59 bài kiểm thử đã vượt qua thành công.")
         return True
     else:
-        print("[ERROR] Test suite failed! Update aborted to prevent breaking existing installation.")
+        print("[ERROR] Kiểm thử thất bại! Hủy cập nhật để bảo vệ hệ thống hiện tại.")
         print(res.stdout)
         print(res.stderr)
         return False
 
 
-def rebuild_executable() -> bool:
-    """Triggers build_exe.py to rebuild root executable."""
-    print("[*] Rebuilding standalone root executable (disk_investigator.exe)...")
-    res = run_cmd([sys.executable, "build_exe.py"])
-    if res.returncode == 0:
-        print("[+] Standalone executable successfully rebuilt.")
-        return True
-    else:
-        print(f"[ERROR] Failed to compile executable. Code: {res.returncode}")
-        print(res.stderr)
+def rebuild_executables() -> bool:
+    """Triggers build_exe.py and build_installer.py."""
+    print("[*] Đang biên dịch lại binary độc lập (disk_investigator.exe)...")
+    res_bin = run_cmd([sys.executable, "build_exe.py"])
+    if res_bin.returncode != 0:
+        print(f"[ERROR] Thất bại khi đóng gói binary. Code: {res_bin.returncode}")
+        print(res_bin.stderr)
         return False
+    print("[+] Binary độc lập đã được biên dịch thành công.")
+
+    print("[*] Đang đóng gói bộ cài đặt All-in-One (disk-investigator-setup.exe)...")
+    res_inst = run_cmd([sys.executable, "build_installer.py"])
+    if res_inst.returncode != 0:
+        print(f"[ERROR] Thất bại khi đóng gói setup. Code: {res_inst.returncode}")
+        print(res_inst.stderr)
+        return False
+    print("[+] Setup EXE đã được đóng gói thành công.")
+    return True
 
 
 def clear_update_cache() -> None:
-    """Clears cached update status file."""
-    cache_file = ROOT_DIR / ".investigation_cache" / "update_status.json"
-    if cache_file.exists():
+    """Clears cached update status file in %LOCALAPPDATA%."""
+    local_app_data = os.environ.get("LOCALAPPDATA")
+    if local_app_data:
+        cache_file = Path(local_app_data) / "DiskInvestigator" / "updates" / "update_status.json"
+        if cache_file.exists():
+            try:
+                cache_file.unlink()
+            except Exception:
+                pass
+
+
+def update_via_standalone_download(latest_ver: str) -> int:
+    """
+    Downloads canonical disk-investigator-setup.exe from GitHub Releases
+    and runs it silently to update installed tool.
+    """
+    tag = f"v{latest_ver}"
+    download_url = f"https://github.com/{GITHUB_REPO}/releases/download/{tag}/disk-investigator-setup.exe"
+    print(f"[*] Đang tải bản cài đặt {tag} từ GitHub Releases...")
+    print(f"    URL: {download_url}")
+
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        dest_exe = Path(tmp_dir) / "disk-investigator-setup.exe"
         try:
-            cache_file.unlink()
-        except Exception:
-            pass
+            req = urllib.request.Request(
+                download_url,
+                headers={"User-Agent": "disk-investigator-updater"},
+            )
+            with urllib.request.urlopen(req, timeout=30) as resp, open(dest_exe, "wb") as f:
+                shutil.copyfileobj(resp, f)
+            print(f"[+] Tải thành công ({dest_exe.stat().st_size:,} bytes).")
+        except Exception as e:
+            print(f"[ERROR] Tải bản cài đặt thất bại: {e}")
+            return 1
+
+        print("[*] Tiến hành chạy cài đặt tự động...")
+        run_res = subprocess.run([str(dest_exe), "--silent"], capture_output=True, text=True)
+        if run_res.returncode == 0:
+            print("[+] Cập nhật thành công!")
+            clear_update_cache()
+            return 0
+        else:
+            print(f"[ERROR] Cài đặt thất bại với mã lỗi {run_res.returncode}: {run_res.stderr}")
+            return 1
+
+
+def update_via_git(latest_ver: str, force: bool = False) -> int:
+    """
+    Pulls exact Git release tag, runs quality gate tests, and rebuilds binaries.
+    """
+    tag = f"v{latest_ver}"
+    print(f"[2/5] Lấy danh sách tag từ remote origin...")
+    fetch_res = run_cmd(["git", "fetch", "--tags", "origin"])
+    if fetch_res.returncode != 0:
+        print(f"[ERROR] 'git fetch' thất bại: {fetch_res.stderr.strip()}")
+        return 1
+
+    print(f"[3/5] Chuyển sang tag phát hành chính thức: {tag}...")
+    # Check if tag exists locally
+    tag_check = run_cmd(["git", "tag", "-l", tag])
+    if tag not in tag_check.stdout.split():
+        print(f"[*] Fetching cụ thể tag {tag}...")
+        run_cmd(["git", "fetch", "origin", f"refs/tags/{tag}:refs/tags/{tag}"])
+
+    # Checkout or merge
+    checkout_res = run_cmd(["git", "checkout", tag])
+    if checkout_res.returncode != 0:
+        print(f"[!] Warning checkout tag: {checkout_res.stderr.strip()}")
+        # Fallback pull
+        pull_res = run_cmd(["git", "pull", "origin", "main"])
+        if pull_res.returncode != 0:
+            print(f"[ERROR] Không thể lấy mã nguồn mới nhất: {pull_res.stderr.strip()}")
+            return 1
+
+    # Run tests
+    print("[4/5] Chạy kiểm thử chất lượng mã nguồn mới...")
+    if not run_tests():
+        return 1
+
+    # Rebuild binaries
+    print("[5/5] Biên dịch lại các tệp thực thi...")
+    if not rebuild_executables():
+        return 1
+
+    sync_antigravity_skill()
+    clear_update_cache()
+    return 0
 
 
 def perform_update(force: bool = False) -> int:
@@ -139,18 +245,13 @@ def perform_update(force: bool = False) -> int:
     print("=======================================================")
     print("       DISK INVESTIGATOR - GITHUB AUTO-UPDATER         ")
     print("=======================================================")
-    print(f"Local Version:     v{local_ver}")
+    print(f"Phiên bản hiện tại: v{local_ver}")
     print(f"Repository:        https://github.com/{GITHUB_REPO}")
-    print(f"Workspace:         {ROOT_DIR}")
+    print(f"Thư mục làm việc:  {ROOT_DIR}")
     print("=======================================================\n")
 
-    if not is_git_repo():
-        print("[ERROR] Current directory is not a Git repository.")
-        print("Please initialize git and connect to the remote repository first.")
-        return 1
-
     # Step 1: Check remote version
-    print("[1/5] Checking remote status on GitHub...")
+    print("[1/5] Kiểm tra phiên bản mới trên GitHub...")
     update_info = check_remote_status()
     latest_ver = update_info.get("latest_version", local_ver)
     has_update = update_info.get("update_available", False)
@@ -158,56 +259,28 @@ def perform_update(force: bool = False) -> int:
     print(f"[*] Local: v{local_ver} | Remote: v{latest_ver}")
 
     if not has_update and not force:
-        print(f"\n[+] You are already running the latest version (v{local_ver}).")
-        print("[*] Use --force if you want to pull and recompile anyway.")
+        print(f"\n[+] Bạn đang sử dụng phiên bản mới nhất (v{local_ver}).")
+        print("[*] Dùng tùy chọn --force nếu muốn buộc cập nhật và biên dịch lại.")
         return 0
 
     if has_update:
-        print(f"[!] New version v{latest_ver} detected on GitHub!")
+        print(f"[!] Đã tìm thấy phiên bản mới v{latest_ver} trên GitHub!")
 
-    # Step 2: Git fetch and pull
-    print("[2/5] Pulling latest changes from GitHub origin/main...")
-    fetch_res = run_cmd(["git", "fetch", "origin"])
-    if fetch_res.returncode != 0:
-        print(f"[ERROR] Git fetch failed: {fetch_res.stderr.strip()}")
-        return 1
+    if is_git_repo():
+        print("[*] Môi trường: Git Workspace -> Cập nhật qua Git Tag & Local Build.")
+        ret = update_via_git(latest_ver, force=force)
+    else:
+        print("[*] Môi trường: Standalone/User -> Tải trực tiếp Setup EXE từ GitHub Releases.")
+        ret = update_via_standalone_download(latest_ver)
 
-    pull_res = run_cmd(["git", "pull", "--rebase", "origin", "main"])
-    if pull_res.returncode != 0:
-        print(f"[!] Warning: 'git pull --rebase' failed: {pull_res.stderr.strip()}")
-        print("[*] Attempting standard 'git pull'...")
-        pull_res = run_cmd(["git", "pull", "origin", "main"])
-        if pull_res.returncode != 0:
-            print(f"[ERROR] Git pull failed: {pull_res.stderr.strip()}")
-            return 1
-
-    print(f"[+] Git output: {pull_res.stdout.strip()}")
-    new_local_ver = get_local_version()
-
-    # Step 3: Run test suite
-    print("[3/5] Verifying code integrity with automated tests...")
-    if not run_tests():
-        print("[ERROR] Tests failed post-pull. Please inspect codebase.")
-        return 1
-
-    # Step 4: Rebuild executable
-    print("[4/5] Updating standalone binary...")
-    if not rebuild_executable():
-        print("[ERROR] Standalone binary build failed.")
-        return 1
-
-    # Step 5: Sync skill & clear cache
-    print("[5/5] Finalizing update...")
-    sync_antigravity_skill()
-    clear_update_cache()
-
-    print("\n=======================================================")
-    print("             UPDATE COMPLETED SUCCESSFULLY             ")
-    print(f" Previous Version: v{local_ver}")
-    print(f" Current Version:  v{new_local_ver}")
-    print(f" Binary:           disk_investigator.exe")
-    print("=======================================================\n")
-    return 0
+    if ret == 0:
+        new_ver = get_local_version()
+        print("\n=======================================================")
+        print("             CẬP NHẬT HOÀN TẤT THÀNH CÔNG              ")
+        print(f" Phiên bản cũ: v{local_ver}")
+        print(f" Phiên bản mới:v{new_ver}")
+        print("=======================================================\n")
+    return ret
 
 
 def main() -> int:

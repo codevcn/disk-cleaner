@@ -71,26 +71,42 @@ def format_bytes(size: int) -> str:
     return f"{size:.2f} TB"
 
 
-def clean_root_executables() -> List[str]:
+def check_target_lock() -> None:
     """
-    Finds and deletes any .exe files in the root folder.
-    Raises PermissionError if a file is currently locked by a running process.
+    Checks if the target binary is locked by a running process.
+    Raises PermissionError early before starting compilation.
     """
-    removed: List[str] = []
-    for item in ROOT_DIR.glob("*.exe"):
-        if item.is_file():
-            print(f"[*] Removing existing root executable: {item.name}")
-            try:
-                item.unlink()
-                removed.append(item.name)
-            except PermissionError as pe:
-                print(f"[ERROR] Cannot delete '{item.name}': file is locked by a running process.")
-                print("[ERROR] Please terminate any running instances of disk_investigator.exe and try again.")
-                raise pe
-            except OSError as oe:
-                print(f"[ERROR] Failed to delete '{item.name}': {oe}")
-                raise oe
-    return removed
+    if TARGET_EXE_PATH.exists():
+        try:
+            # Try opening in append mode to check if Windows file lock is active
+            with open(TARGET_EXE_PATH, "a+b"):
+                pass
+        except PermissionError as pe:
+            print(f"[ERROR] Cannot replace '{TARGET_EXE_NAME}': file is locked by a running process.")
+            print("[ERROR] Please terminate any running instances of disk_investigator.exe and try again.")
+            raise pe
+        except OSError as oe:
+            print(f"[ERROR] Target binary check failed: {oe}")
+            raise oe
+
+
+def clean_project_executable() -> bool:
+    """
+    Safely removes TARGET_EXE_PATH if it exists.
+    Strictly isolated: never deletes arbitrary .exe files.
+    """
+    if TARGET_EXE_PATH.exists():
+        try:
+            TARGET_EXE_PATH.unlink()
+            print(f"[+] Removed project executable: {TARGET_EXE_NAME}")
+            return True
+        except PermissionError as pe:
+            print(f"[ERROR] Cannot delete '{TARGET_EXE_NAME}': file is locked by a running process.")
+            raise pe
+        except OSError as oe:
+            print(f"[ERROR] Failed to delete '{TARGET_EXE_NAME}': {oe}")
+            raise oe
+    return False
 
 
 def clean_temporary_build_dirs() -> None:
@@ -176,10 +192,10 @@ def build_executable(version_override: Optional[str] = None) -> bool:
     print(f"Target Binary:     {TARGET_EXE_NAME}")
     print(f"=======================================================\n")
 
-    # Step 1: Pre-build cleanup of existing root executables
-    print("[1/6] Scanning and removing existing root executables...")
+    # Step 1: Pre-build lock check on target executable
+    print("[1/6] Checking write availability for target executable...")
     try:
-        clean_root_executables()
+        check_target_lock()
     except Exception:
         return False
 
@@ -202,7 +218,7 @@ def build_executable(version_override: Optional[str] = None) -> bool:
     BUILD_WORK_DIR.mkdir(parents=True, exist_ok=True)
     BUILD_DIST_DIR.mkdir(parents=True, exist_ok=True)
 
-    # Step 4: Run PyInstaller
+    # Step 4: Run PyInstaller into temporary dist directory
     print("[4/6] Compiling single-file binary with PyInstaller...")
     cmd = [
         sys.executable,
@@ -226,23 +242,63 @@ def build_executable(version_override: Optional[str] = None) -> bool:
         clean_temporary_build_dirs()
         return False
 
-    # Step 5: Move binary to root & clean temporary dirs
-    print("[5/6] Moving final executable to project root...")
     compiled_binary = BUILD_DIST_DIR / TARGET_EXE_NAME
     if not compiled_binary.exists():
         print(f"[ERROR] Expected binary not found at: {compiled_binary}")
         clean_temporary_build_dirs()
         return False
 
-    shutil.move(str(compiled_binary), str(TARGET_EXE_PATH))
+    # Step 5: Verification Quality Gate on staging binary BEFORE replacing root executable
+    print("[5/6] Verifying staged executable (--version and doctor smoke test)...")
+    try:
+        ver_proc = subprocess.run(
+            [str(compiled_binary), "--version"],
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            timeout=15,
+        )
+        if ver_proc.returncode != 0:
+            print(f"[ERROR] Staged binary self-test failed with exit code {ver_proc.returncode}")
+            print(ver_proc.stderr)
+            clean_temporary_build_dirs()
+            return False
+
+        version_output = ver_proc.stdout.strip() or ver_proc.stderr.strip()
+        print(f"[+] Staged binary --version OK: '{version_output}'")
+
+        doc_proc = subprocess.run(
+            [str(compiled_binary), "doctor"],
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            timeout=15,
+        )
+        if doc_proc.returncode != 0:
+            print(f"[ERROR] Staged binary doctor check failed with exit code {doc_proc.returncode}")
+            print(doc_proc.stderr)
+            clean_temporary_build_dirs()
+            return False
+        print("[+] Staged binary doctor check OK.")
+    except Exception as e:
+        print(f"[ERROR] Quality gate test exception: {e}")
+        clean_temporary_build_dirs()
+        return False
+
+    # Step 6: Atomic swap into project root & cleanup
+    print("[6/6] Atomic swap of new binary to project root & recording history...")
+    try:
+        os.replace(str(compiled_binary), str(TARGET_EXE_PATH))
+    except Exception as e:
+        print(f"[ERROR] Failed atomic swap to {TARGET_EXE_PATH}: {e}")
+        clean_temporary_build_dirs()
+        return False
+
     clean_temporary_build_dirs()
 
-    # Verify ONLY 1 .exe exists in root
-    root_exes = list(ROOT_DIR.glob("*.exe"))
-    if len(root_exes) != 1 or root_exes[0].name != TARGET_EXE_NAME:
-        print(f"[!] Warning: Root folder has unexpected .exe files: {[e.name for e in root_exes]}")
-
-    # Compute binary metadata
+    # Compute binary metadata from installed binary
     file_size = TARGET_EXE_PATH.stat().st_size
     formatted_size = format_bytes(file_size)
     sha256_hash = compute_sha256(TARGET_EXE_PATH)
@@ -253,22 +309,6 @@ def build_executable(version_override: Optional[str] = None) -> bool:
     print(f"[+] File Size:         {formatted_size} ({file_size:,} bytes)")
     print(f"[+] SHA-256 Digest:    {sha256_hash}")
     print(f"[+] Build Time:        {duration_sec:.2f} seconds")
-
-    # Step 6: Post-build self-test & history recording
-    print("[6/6] Verifying standalone executable and recording build history...")
-
-    # Run --version test on the compiled binary
-    try:
-        test_proc = subprocess.run(
-            [str(TARGET_EXE_PATH), "--version"],
-            capture_output=True,
-            text=True,
-            timeout=15,
-        )
-        version_output = test_proc.stdout.strip() or test_proc.stderr.strip()
-        print(f"[+] Executable self-test OK: '{version_output}'")
-    except Exception as e:
-        print(f"[!] Warning: Executable self-test failed: {e}")
 
     # Update build_history.json
     history_data = load_build_history()
@@ -331,8 +371,8 @@ def main() -> int:
         return 0
 
     if args.clean_only:
-        print("[*] Cleaning root executables and temporary build directories...")
-        clean_root_executables()
+        print("[*] Cleaning project executable and temporary build directories...")
+        clean_project_executable()
         clean_temporary_build_dirs()
         print("[+] Cleanup complete.")
         return 0
