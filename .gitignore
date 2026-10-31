@@ -1,0 +1,44 @@
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*$py.class
+
+# PyInstaller & build outputs
+*.manifest
+*.spec
+build/
+dist/
+_pyinstaller_work/
+_pyinstaller_dist/
+
+# Standalone Windows Binaries (Distributed via GitHub Releases)
+*.exe
+
+# Cache & investigation artifacts
+.investigation_cache/
+*.log
+
+# Archives & Temporary files
+*.zip
+*.tar.gz
+*.rar
+
+# Environment & Virtual environments
+.env
+.venv/
+env/
+venv/
+ENV/
+
+# IDE & Editor artifacts
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS generated files
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+$RECYCLE.BIN/
+.DS_Store

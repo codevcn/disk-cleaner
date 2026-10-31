@@ -1,0 +1,74 @@
+{
+  "latest": {
+    "build_number": 4,
+    "version": "2.0.3",
+    "timestamp": "2026-10-31T22:29:20.001183+07:00",
+    "executable": "disk_investigator.exe",
+    "file_size_bytes": 8924643,
+    "file_size_formatted": "8.51 MB",
+    "sha256": "d7e1438326d8d1a67aede8edcd02650dc59160fc470a80ccc76f5ed2c663bda3",
+    "build_duration_sec": 32.26,
+    "python_version": "3.12.0",
+    "pyinstaller_version": "6.11.1",
+    "platform": "Windows 11 (AMD64)",
+    "status": "SUCCESS"
+  },
+  "history": [
+    {
+      "build_number": 1,
+      "version": "2.0.3",
+      "timestamp": "2026-10-31T01:16:25.491971+07:00",
+      "executable": "disk_investigator.exe",
+      "file_size_bytes": 8383666,
+      "file_size_formatted": "8.00 MB",
+      "sha256": "a1cd6e9f5fa103ec03dff59ce6a768a1dc9067edee42fdd1bee5f84d2259ed23",
+      "build_duration_sec": 33.38,
+      "python_version": "3.12.0",
+      "pyinstaller_version": "6.11.1",
+      "platform": "Windows 11 (AMD64)",
+      "status": "SUCCESS"
+    },
+    {
+      "build_number": 2,
+      "version": "2.0.3",
+      "timestamp": "2026-10-31T01:17:23.322364+07:00",
+      "executable": "disk_investigator.exe",
+      "file_size_bytes": 8383666,
+      "file_size_formatted": "8.00 MB",
+      "sha256": "89d1c241981ee832c03a2f26fbb9d72601fdb05521e7e7ea1b1d22c7e51ffaa7",
+      "build_duration_sec": 19.93,
+      "python_version": "3.12.0",
+      "pyinstaller_version": "6.11.1",
+      "platform": "Windows 11 (AMD64)",
+      "status": "SUCCESS"
+    },
+    {
+      "build_number": 3,
+      "version": "2.0.3",
+      "timestamp": "2026-10-31T02:08:52.771231+07:00",
+      "executable": "disk_investigator.exe",
+      "file_size_bytes": 8383666,
+      "file_size_formatted": "8.00 MB",
+      "sha256": "1d7f0f87535ccfbbdf1730019518b6e555764b9190c7628b64ea8bf9f574abf3",
+      "build_duration_sec": 29.69,
+      "python_version": "3.12.0",
+      "pyinstaller_version": "6.11.1",
+      "platform": "Windows 11 (AMD64)",
+      "status": "SUCCESS"
+    },
+    {
+      "build_number": 4,
+      "version": "2.0.3",
+      "timestamp": "2026-10-31T22:29:20.001183+07:00",
+      "executable": "disk_investigator.exe",
+      "file_size_bytes": 8924643,
+      "file_size_formatted": "8.51 MB",
+      "sha256": "d7e1438326d8d1a67aede8edcd02650dc59160fc470a80ccc76f5ed2c663bda3",
+      "build_duration_sec": 32.26,
+      "python_version": "3.12.0",
+      "pyinstaller_version": "6.11.1",
+      "platform": "Windows 11 (AMD64)",
+      "status": "SUCCESS"
+    }
+  ]
+}
