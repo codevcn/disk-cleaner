@@ -281,6 +281,46 @@ class TestInstaller(unittest.TestCase):
         # PATH removal must NOT be called since path pre-existed!
         mock_remove_path.assert_not_called()
 
+    @patch("installer.get_resource_path")
+    @patch("installer.get_target_directories")
+    @patch("installer.add_bin_to_user_path")
+    @patch("installer.remove_bin_from_user_path")
+    def test_install_rollback_on_path_failure(
+        self, mock_remove_path, mock_add_path, mock_get_dirs, mock_resource
+    ):
+        inst_dir = self.test_root / "install"
+        bin_dir = inst_dir / "bin"
+        skill_dir = self.test_root / "skill"
+        skill_ref_dir = skill_dir / "references"
+        payload_dir = self.test_root / "payload"
+        payload_dir.mkdir(parents=True, exist_ok=True)
+
+        src_exe = payload_dir / "disk_investigator.exe"
+        src_exe.write_text("MOCK BINARY", encoding="utf-8")
+        src_skill = payload_dir / "SKILL.md"
+        src_skill.write_text("MOCK SKILL", encoding="utf-8")
+        src_readme = payload_dir / "README.md"
+        src_readme.write_text("MOCK README", encoding="utf-8")
+
+        mock_resource.side_effect = lambda name: payload_dir / name
+        mock_get_dirs.return_value = (inst_dir, bin_dir, skill_dir, skill_ref_dir)
+        # PATH configuration fails!
+        mock_add_path.return_value = (False, False)
+
+        inst_dir.mkdir(parents=True, exist_ok=True)
+        bin_dir.mkdir(parents=True, exist_ok=True)
+        skill_dir.mkdir(parents=True, exist_ok=True)
+        skill_ref_dir.mkdir(parents=True, exist_ok=True)
+
+        old_exe = bin_dir / "disk_investigator.exe"
+        old_exe.write_text("OLD BINARY", encoding="utf-8")
+
+        ok = installer.install(silent=True)
+        self.assertFalse(ok, "Install must fail-closed if PATH configuration fails")
+        # Rollback must restore old binary
+        self.assertTrue(old_exe.exists())
+        self.assertEqual(old_exe.read_text(encoding="utf-8"), "OLD BINARY")
+
 
 if __name__ == "__main__":
     unittest.main()

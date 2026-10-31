@@ -75,7 +75,7 @@ def get_installer_version() -> str:
         except Exception:
             pass
 
-    return "2.1.2"
+    return "unknown"
 
 
 def compute_sha256(filepath: Path) -> str:
@@ -583,8 +583,10 @@ def install(
         except Exception as re:
             print(f"[ERROR] Lỗi trong quá trình rollback: {re}")
 
-    # Copy files via atomic replace
+    # Execute full installation transaction within a single exception boundary
+    path_changed = False
     try:
+        # Step 3: Copy files via atomic replace
         # Binary
         tmp_exe = bin_dir / "disk_investigator.exe.tmp"
         shutil.copy2(src_exe, tmp_exe)
@@ -611,43 +613,43 @@ def install(
                 shutil.copy2(dev_setup, lifecycle_exe)
 
         print("[+] Đã cài đặt binary, Skill AI Agent, lifecycle engine và tài liệu kỹ thuật.")
+
+        # Step 4: Configure User PATH (FAIL-CLOSED)
+        print("[4/6] Cập nhật biến môi trường User PATH (Registry an toàn)...")
+        path_ok, path_changed = add_bin_to_user_path(bin_dir)
+        if not path_ok:
+            raise RuntimeError("Thất bại khi cấu hình biến môi trường User PATH trong Registry.")
+
+        # Step 5: Generate uninstaller & manifest
+        print("[5/6] Tạo bộ gỡ cài đặt và ghi nhận Install Manifest...")
+        generate_uninstaller_script(install_dir, bin_dir, target_skill)
+
+        current_version = get_installer_version()
+        manifest_data: Dict[str, Any] = {
+            "app_name": APP_NAME,
+            "version": current_version,
+            "installed_at": datetime.datetime.now().astimezone().isoformat(),
+            "install_dir": str(install_dir),
+            "bin_dir": str(bin_dir),
+            "bin_file": str(target_exe),
+            "bin_sha256": compute_sha256(target_exe),
+            "docs_file": str(target_docs),
+            "docs_sha256": compute_sha256(target_docs),
+            "skill_file": str(target_skill),
+            "skill_sha256": compute_sha256(target_skill),
+            "skill_backup": skill_backup_path,
+            "path_configured": path_ok,
+        }
+        write_manifest(install_dir, manifest_data)
+
+        # Step 6: Post-install verification smoke test
+        print("[6/6] Kiểm tra xác thực vận hành (Smoke Test)...")
+        smoke_ok = run_smoke_test(target_exe)
+        if not smoke_ok:
+            raise RuntimeError("Smoke test vận hành thất bại.")
+
     except Exception as e:
-        print(f"[ERROR] Gặp lỗi khi ghi tệp hệ thống: {e}")
-        perform_rollback(path_changed=False)
-        return False
-
-    # Step 4: Configure User PATH
-    print("[4/6] Cập nhật biến môi trường User PATH (Registry an toàn)...")
-    path_ok, path_changed = add_bin_to_user_path(bin_dir)
-
-    # Step 5: Generate uninstaller & manifest
-    print("[5/6] Tạo bộ gỡ cài đặt và ghi nhận Install Manifest...")
-    generate_uninstaller_script(install_dir, bin_dir, target_skill)
-
-    current_version = get_installer_version()
-    manifest_data: Dict[str, Any] = {
-        "app_name": APP_NAME,
-        "version": current_version,
-        "installed_at": datetime.datetime.now().astimezone().isoformat(),
-        "install_dir": str(install_dir),
-        "bin_dir": str(bin_dir),
-        "bin_file": str(target_exe),
-        "bin_sha256": compute_sha256(target_exe),
-        "docs_file": str(target_docs),
-        "docs_sha256": compute_sha256(target_docs),
-        "skill_file": str(target_skill),
-        "skill_sha256": compute_sha256(target_skill),
-        "skill_backup": skill_backup_path,
-        "path_configured": path_ok,
-    }
-    write_manifest(install_dir, manifest_data)
-
-    # Step 6: Post-install verification smoke test
-    print("[6/6] Kiểm tra xác thực vận hành (Smoke Test)...")
-    smoke_ok = run_smoke_test(target_exe)
-
-    if not smoke_ok:
-        print("[ERROR] Smoke test thất bại! Khởi động quy trình hoàn tác (Rollback)...")
+        print(f"[ERROR] Quá trình cài đặt thất bại: {e}")
         perform_rollback(path_changed=path_changed)
         return False
 

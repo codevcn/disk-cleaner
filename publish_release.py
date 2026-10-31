@@ -240,9 +240,25 @@ def publish_release(
         print("[DRY-RUN] Success (simulation complete).")
         return True
 
-    # 1. Git Add & Commit
-    print("[1/5] Staging release files and committing to Git...")
-    run_cmd(["git", "add", "."])
+    # 1. Stage explicit release files and commit
+    print("[1/5] Staging explicit release files and committing to Git...")
+    explicit_paths = [
+        "disk_investigator",
+        "skills",
+        "installer.py",
+        "build_installer.py",
+        "build_exe.py",
+        "publish_release.py",
+        "update_from_github.py",
+        "README.md",
+        ".github",
+        ".gitignore",
+        "build.cmd",
+        "publish.cmd",
+        "update.cmd",
+    ]
+    for p in explicit_paths:
+        run_cmd(["git", "add", p])
 
     diff_check = run_cmd(["git", "status", "--porcelain"])
     if diff_check.stdout.strip():
@@ -303,8 +319,30 @@ def publish_release(
                 pass
         time.sleep(10)
 
-    # 5. Invalidate local update cache and verify published release
-    print("[5/5] Finalizing deployment and verifying release assets...")
+    # Invariant: CI must have succeeded. Never fail-open!
+    if not workflow_success:
+        print("[ERROR] GitHub Actions CI release workflow did not complete successfully.")
+        return False
+
+    # 5. Verify published release assets on GitHub
+    print("[5/5] Finalizing deployment and cryptographically verifying release assets on GitHub...")
+    verify_res = run_cmd(["gh", "release", "view", tag_name, "--json", "assets"])
+    if verify_res.returncode != 0:
+        print(f"[ERROR] Failed to query release assets on GitHub: {verify_res.stderr.strip()}")
+        return False
+
+    try:
+        rel_data = json.loads(verify_res.stdout)
+        asset_names = [a.get("name") for a in rel_data.get("assets", [])]
+        required_assets = ["disk-investigator-setup.exe", "disk_investigator.exe", "SHA256SUMS.txt"]
+        for req in required_assets:
+            if req not in asset_names:
+                print(f"[ERROR] Required release asset '{req}' is missing from GitHub Release {tag_name}!")
+                return False
+        print(f"[+] All required release assets verified on GitHub: {', '.join(required_assets)}")
+    except Exception as e:
+        print(f"[ERROR] Failed to parse release verification data: {e}")
+        return False
     local_app_data = os.environ.get("LOCALAPPDATA")
     if local_app_data:
         cache_file = Path(local_app_data) / "DiskInvestigator" / "updates" / "update_status.json"

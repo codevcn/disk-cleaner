@@ -48,7 +48,7 @@ def get_current_version() -> str:
                     parts = line.split("=")
                     if len(parts) == 2:
                         return parts[1].strip().strip('"').strip("'")
-    return "2.1.2"
+    raise RuntimeError("Cannot resolve __version__ from disk_investigator/__init__.py")
 
 BUILD_WORK_DIR = ROOT_DIR / "_pyinstaller_installer_work"
 BUILD_DIST_DIR = ROOT_DIR / "_pyinstaller_installer_dist"
