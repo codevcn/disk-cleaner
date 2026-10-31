@@ -244,6 +244,30 @@ python update_from_github.py
 update.cmd
 ```
 
+### One-Click Remote Publishing (`publish.cmd` / `publish_release.py`)
+
+When you finish implementing a new feature or bugfix, publish a new release to GitHub with 1 command:
+
+```cmd
+# Publish patch update (e.g. v2.0.3 -> v2.0.4)
+publish.cmd --bump-patch "fix: improve path resolution"
+
+# Publish minor update (e.g. v2.0.3 -> v2.1.0)
+publish.cmd --bump-minor "feat: add specialized cache cleaner"
+
+# Publish specific version
+publish.cmd --version 2.0.5 "release v2.0.5"
+
+# Dry-run simulation (without committing or pushing)
+publish.cmd --bump-patch --dry-run "test release pipeline"
+```
+
+`publish.cmd` executes the complete publishing pipeline:
+1. **Automated Quality Gate**: Runs all 48 tests (`python -m unittest discover -s disk_investigator/tests`). Aborts immediately if any test fails to guarantee production stability.
+2. **Binary Packaging**: Calls `build_exe.py` to compile `disk_investigator.exe` and update `build_history.json`.
+3. **Git Commit & Push**: Stages all modified files, commits with release title, and pushes to `origin/main`.
+4. **GitHub Release & Asset Upload**: Creates tag `vX.Y.Z` and uploads `disk_investigator.exe` to GitHub Releases via `gh release create`.
+
 ---
 
 ## Complete CLI Command Reference
