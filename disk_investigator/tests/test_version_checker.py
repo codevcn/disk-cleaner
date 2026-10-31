@@ -39,11 +39,16 @@ class TestVersionChecker(unittest.TestCase):
     def test_is_valid_cache(self):
         now = time.time()
         valid = {
+            "schema_version": 1,
             "repo": "codevcn/disk-cleaner",
             "checked_at": now - 100,
             "latest_version": "2.0.4",
         }
         self.assertTrue(_is_valid_cache(valid, "codevcn/disk-cleaner"))
+
+        # Missing or invalid schema_version
+        invalid_schema = dict(valid, schema_version=99)
+        self.assertFalse(_is_valid_cache(invalid_schema, "codevcn/disk-cleaner"))
 
         # Invalid repo
         self.assertFalse(_is_valid_cache(valid, "other/repo"))
@@ -107,6 +112,7 @@ class TestVersionChecker(unittest.TestCase):
 
             now = time.time()
             cached_data = {
+                "schema_version": 1,
                 "status": "checked",
                 "update_available": True,
                 "current_version": "2.0.3",

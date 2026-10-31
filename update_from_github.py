@@ -101,12 +101,41 @@ def check_remote_status() -> Dict[str, Any]:
     return info
 
 
+def check_git_origin() -> bool:
+    """Verifies that Git remote origin points to canonical codevcn/disk-cleaner."""
+    res = run_cmd(["git", "remote", "get-url", "origin"])
+    if res.returncode != 0:
+        return False
+    url = res.stdout.strip().lower()
+    return "codevcn/disk-cleaner" in url
+
+
+def compute_sha256(filepath: Path) -> str:
+    """Computes SHA-256 hash of a file."""
+    import hashlib
+    sha = hashlib.sha256()
+    with open(filepath, "rb") as f:
+        while chunk := f.read(65536):
+            sha.update(chunk)
+    return sha.hexdigest()
+
+
 def sync_antigravity_skill() -> bool:
-    """Copies workspace skill file to Antigravity global skill config."""
+    """Copies workspace skill file to Antigravity global config with safe backup."""
     if not LOCAL_SKILL_PATH.exists():
         return False
     try:
         GLOBAL_SKILL_PATH.parent.mkdir(parents=True, exist_ok=True)
+        if GLOBAL_SKILL_PATH.exists():
+            curr_h = compute_sha256(GLOBAL_SKILL_PATH)
+            new_h = compute_sha256(LOCAL_SKILL_PATH)
+            if curr_h != new_h:
+                import datetime
+                ts = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+                backup_file = GLOBAL_SKILL_PATH.parent / f"SKILL.md.user-backup-{ts}"
+                shutil.copy2(GLOBAL_SKILL_PATH, backup_file)
+                print(f"[+] Đã sao lưu Skill tùy biến trước đó: {backup_file.name}")
+
         shutil.copy2(LOCAL_SKILL_PATH, GLOBAL_SKILL_PATH)
         print(f"[+] Đã đồng bộ Skill cho Antigravity: {GLOBAL_SKILL_PATH}")
         return True
@@ -163,27 +192,63 @@ def clear_update_cache() -> None:
 
 def update_via_standalone_download(latest_ver: str) -> int:
     """
-    Downloads canonical disk-investigator-setup.exe from GitHub Releases
-    and runs it silently to update installed tool.
+    Downloads canonical disk-investigator-setup.exe and SHA256SUMS.txt from GitHub Releases,
+    verifies SHA-256 checksum cryptographically, and runs silent upgrade.
     """
     tag = f"v{latest_ver}"
-    download_url = f"https://github.com/{GITHUB_REPO}/releases/download/{tag}/disk-investigator-setup.exe"
+    base_url = f"https://github.com/{GITHUB_REPO}/releases/download/{tag}"
+    download_url = f"{base_url}/disk-investigator-setup.exe"
+    checksum_url = f"{base_url}/SHA256SUMS.txt"
+
     print(f"[*] Đang tải bản cài đặt {tag} từ GitHub Releases...")
-    print(f"    URL: {download_url}")
+    print(f"    Binary URL:   {download_url}")
+    print(f"    Checksum URL: {checksum_url}")
 
     with tempfile.TemporaryDirectory() as tmp_dir:
         dest_exe = Path(tmp_dir) / "disk-investigator-setup.exe"
+        dest_sums = Path(tmp_dir) / "SHA256SUMS.txt"
+
+        # 1. Download checksum manifest
+        expected_sha: Optional[str] = None
+        try:
+            req_sum = urllib.request.Request(
+                checksum_url,
+                headers={"User-Agent": "disk-investigator-updater"},
+            )
+            with urllib.request.urlopen(req_sum, timeout=15) as resp:
+                sums_text = resp.read().decode("utf-8")
+                dest_sums.write_text(sums_text, encoding="utf-8")
+                for line in sums_text.splitlines():
+                    if "disk-investigator-setup.exe" in line:
+                        expected_sha = line.split()[0].strip().lower()
+                        break
+        except Exception as e:
+            print(f"[!] Cảnh báo: Không thể tải SHA256SUMS.txt: {e}")
+
+        # 2. Download installer
         try:
             req = urllib.request.Request(
                 download_url,
                 headers={"User-Agent": "disk-investigator-updater"},
             )
-            with urllib.request.urlopen(req, timeout=30) as resp, open(dest_exe, "wb") as f:
+            with urllib.request.urlopen(req, timeout=45) as resp, open(dest_exe, "wb") as f:
                 shutil.copyfileobj(resp, f)
             print(f"[+] Tải thành công ({dest_exe.stat().st_size:,} bytes).")
         except Exception as e:
             print(f"[ERROR] Tải bản cài đặt thất bại: {e}")
             return 1
+
+        # 3. Verify SHA-256 Checksum
+        computed_sha = compute_sha256(dest_exe).lower()
+        if expected_sha:
+            print(f"[*] Kiểm tra SHA-256 Checksum...")
+            print(f"    Kỳ vọng:  {expected_sha}")
+            print(f"    Thực tế:  {computed_sha}")
+            if computed_sha != expected_sha:
+                print("[ERROR] Checksum SHA-256 KHÔNG KHỚP! Bản cài đặt có thể bị lỗi hoặc can thiệp.")
+                print("[ERROR] HỦY CẬP NHẬT để bảo vệ an toàn hệ thống.")
+                return 1
+            print("[+] Checksum SHA-256 khớp 100% (Tính toàn vẹn bảo đảm).")
 
         print("[*] Tiến hành chạy cài đặt tự động...")
         run_res = subprocess.run([str(dest_exe), "--silent"], capture_output=True, text=True)
@@ -199,7 +264,12 @@ def update_via_standalone_download(latest_ver: str) -> int:
 def update_via_git(latest_ver: str, force: bool = False) -> int:
     """
     Pulls exact Git release tag, runs quality gate tests, and rebuilds binaries.
+    Enforces canonical origin and fail-closed behavior (no fallback to main).
     """
+    if not check_git_origin():
+        print(f"[ERROR] Remote origin không trỏ về {GITHUB_REPO}. Hủy cập nhật để bảo vệ workspace.")
+        return 1
+
     tag = f"v{latest_ver}"
     print(f"[2/5] Lấy danh sách tag từ remote origin...")
     fetch_res = run_cmd(["git", "fetch", "--tags", "origin"])
@@ -208,21 +278,20 @@ def update_via_git(latest_ver: str, force: bool = False) -> int:
         return 1
 
     print(f"[3/5] Chuyển sang tag phát hành chính thức: {tag}...")
-    # Check if tag exists locally
     tag_check = run_cmd(["git", "tag", "-l", tag])
     if tag not in tag_check.stdout.split():
         print(f"[*] Fetching cụ thể tag {tag}...")
-        run_cmd(["git", "fetch", "origin", f"refs/tags/{tag}:refs/tags/{tag}"])
+        fetch_tag_res = run_cmd(["git", "fetch", "origin", f"refs/tags/{tag}:refs/tags/{tag}"])
+        if fetch_tag_res.returncode != 0:
+            print(f"[ERROR] Không thể lấy tag {tag} từ remote: {fetch_tag_res.stderr.strip()}")
+            return 1
 
-    # Checkout or merge
+    # Invariant: Checkout exact tag only, fail closed without falling back to main
     checkout_res = run_cmd(["git", "checkout", tag])
     if checkout_res.returncode != 0:
-        print(f"[!] Warning checkout tag: {checkout_res.stderr.strip()}")
-        # Fallback pull
-        pull_res = run_cmd(["git", "pull", "origin", "main"])
-        if pull_res.returncode != 0:
-            print(f"[ERROR] Không thể lấy mã nguồn mới nhất: {pull_res.stderr.strip()}")
-            return 1
+        print(f"[ERROR] Không thể checkout tag {tag}: {checkout_res.stderr.strip()}")
+        print("[ERROR] Invariant Violation: Cập nhật yêu cầu đúng immutable tag phát hành. Hủy cập nhật.")
+        return 1
 
     # Run tests
     print("[4/5] Chạy kiểm thử chất lượng mã nguồn mới...")

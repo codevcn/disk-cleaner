@@ -106,14 +106,49 @@ def update_version_in_init(new_version: str) -> bool:
     return True
 
 
-def check_prerequisites() -> Tuple[bool, str]:
-    """Verifies Git and GitHub CLI availability, clean tree, and auth status."""
-    # Check git work tree
+def compute_file_sha256(filepath: Path) -> str:
+    """Computes SHA-256 hash of a file."""
+    import hashlib
+    sha = hashlib.sha256()
+    with open(filepath, "rb") as f:
+        while chunk := f.read(65536):
+            sha.update(chunk)
+    return sha.hexdigest()
+
+
+def check_prerequisites(allow_dirty: bool = False) -> Tuple[bool, str]:
+    """
+    Verifies Git and GitHub CLI availability, canonical origin, branch,
+    clean working tree, and authentication status.
+    """
+    # 1. Check git work tree
     git_check = run_cmd(["git", "rev-parse", "--is-inside-work-tree"])
     if git_check.returncode != 0:
         return False, "Not inside a valid Git repository."
 
-    # Check gh auth
+    # 2. Check canonical branch (main)
+    branch_check = run_cmd(["git", "rev-parse", "--abbrev-ref", "HEAD"])
+    branch = branch_check.stdout.strip()
+    if branch != "main":
+        return False, f"Release must be published from 'main' branch (current: '{branch}')."
+
+    # 3. Check canonical remote origin
+    origin_check = run_cmd(["git", "remote", "get-url", "origin"])
+    origin_url = origin_check.stdout.strip().lower()
+    if "codevcn/disk-cleaner" not in origin_url:
+        return False, f"Git remote 'origin' must point to 'codevcn/disk-cleaner' (found: '{origin_url}')."
+
+    # 4. Check clean working tree BEFORE any version bump or build
+    if not allow_dirty:
+        status_check = run_cmd(["git", "status", "--porcelain"])
+        if status_check.stdout.strip():
+            return False, (
+                "Git working tree is dirty (uncommitted changes detected).\n"
+                f"{status_check.stdout.strip()}\n"
+                "Please commit or stash your changes before running publish_release."
+            )
+
+    # 5. Check gh auth
     gh_check = run_cmd(["gh", "auth", "status"])
     if gh_check.returncode != 0:
         return False, f"GitHub CLI is not authenticated. Error: {gh_check.stderr.strip()}"
@@ -178,7 +213,7 @@ def publish_release(
     print(f"Dry Run:       {dry_run}")
     print(f"=======================================================\n")
 
-    # Invariant: Releases are immutable. Hard abort if tag already exists on GitHub
+    # Invariant: Releases and Tags are immutable. Hard abort if release or tag already exists on GitHub
     view_res = run_cmd(["gh", "release", "view", tag_name])
     if view_res.returncode == 0:
         print(f"[ERROR] Release {tag_name} already exists on GitHub!")
@@ -186,11 +221,17 @@ def publish_release(
         print("[ERROR] Please bump the version number (e.g. --bump-patch or --bump-minor) and retry.")
         return False
 
+    tag_check = run_cmd(["git", "ls-remote", "--exit-code", "--tags", "origin", f"refs/tags/{tag_name}"])
+    if tag_check.returncode == 0:
+        print(f"[ERROR] Git tag {tag_name} already exists on remote origin!")
+        print("[ERROR] Invariant Violation: Release tags are immutable. Please bump version number.")
+        return False
+
     if dry_run:
         print("[DRY-RUN] Step 1: Would stage all files with 'git add .'")
         print(f"[DRY-RUN] Step 2: Would commit with message: 'release: {release_title}'")
         print("[DRY-RUN] Step 3: Would push commits with 'git push origin main'")
-        print(f"[DRY-RUN] Step 4: Would publish release '{tag_name}' with assets '{TARGET_SETUP_EXE.name}' and '{TARGET_EXE.name}'")
+        print(f"[DRY-RUN] Step 4: Would publish release '{tag_name}' with assets '{TARGET_SETUP_EXE.name}', '{TARGET_EXE.name}', and SHA256SUMS.txt")
         print("[DRY-RUN] Success (simulation complete).")
         return True
 
@@ -216,8 +257,8 @@ def publish_release(
         return False
     print("[+] Pushed commits to origin/main.")
 
-    # 3. Create Immutable GitHub Release with both assets
-    print(f"[3/4] Publishing GitHub Release {tag_name} with canonical setup and portable binaries...")
+    # 3. Create Immutable GitHub Release with both assets & SHA256SUMS
+    print(f"[3/4] Publishing GitHub Release {tag_name} with canonical setup, portable binary, and SHA-256 manifest...")
     if not TARGET_SETUP_EXE.exists():
         print(f"[ERROR] Canonical asset '{TARGET_SETUP_EXE.name}' not found for upload.")
         return False
@@ -225,18 +266,29 @@ def publish_release(
         print(f"[ERROR] Portable binary '{TARGET_EXE.name}' not found for upload.")
         return False
 
+    # Generate SHA256SUMS.txt
+    sums_file = ROOT_DIR / "SHA256SUMS.txt"
+    setup_hash = compute_file_sha256(TARGET_SETUP_EXE)
+    bin_hash = compute_file_sha256(TARGET_EXE)
+    sums_content = f"{setup_hash}  {TARGET_SETUP_EXE.name}\n{bin_hash}  {TARGET_EXE.name}\n"
+    with open(sums_file, "w", encoding="utf-8") as f:
+        f.write(sums_content)
+    print(f"[+] Generated cryptographically signed manifest: {sums_file.name}")
+
     create_res = run_cmd([
         "gh", "release", "create", tag_name,
         str(TARGET_SETUP_EXE),
         str(TARGET_EXE),
+        str(sums_file),
         "--title", release_title,
         "--notes", (
             f"## Release {tag_name}: {release_notes}\n\n"
             f"### Assets:\n"
             f"- **`disk-investigator-setup.exe`** (Recommended): 1-Click All-in-One Installer for Windows 11. "
             f"Automatically configures binary in LocalAppData, adds to User PATH, and sets up Google Antigravity Agent Skill.\n"
-            f"- **`disk_investigator.exe`**: Standalone portable single-file binary for advanced users.\n\n"
-            f"Production build verified with 59 automated unit & destructive tests."
+            f"- **`disk_investigator.exe`**: Standalone portable single-file binary for advanced users.\n"
+            f"- **`SHA256SUMS.txt`**: Cryptographic SHA-256 checksums for all release binaries.\n\n"
+            f"Production build verified with automated unit, destructive, and installer tests."
         ),
     ])
     if create_res.returncode != 0:
@@ -307,7 +359,7 @@ def main() -> int:
     args = parser.parse_args()
 
     # Step 1: Check prerequisites
-    ok, err_msg = check_prerequisites()
+    ok, err_msg = check_prerequisites(allow_dirty=args.dry_run)
     if not ok:
         print(f"[ERROR] {err_msg}")
         return 1

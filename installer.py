@@ -256,6 +256,8 @@ def generate_uninstaller_script(install_dir: Path, bin_dir: Path, skill_path: Pa
     Enables one-click uninstallation from Windows Explorer or CMD.
     """
     uninstaller_path = install_dir / "uninstall.cmd"
+    lifecycle_setup_exe = install_dir / "lifecycle" / "disk-investigator-setup.exe"
+
     batch_content = f"""@echo off
 chcp 65001 >nul
 echo =======================================================
@@ -274,11 +276,13 @@ if /i "%CONFIRM%" neq "Y" (
 echo.
 echo [*] Đang gỡ bỏ binary và thiết lập môi trường...
 
-:: Gọi installer với cờ gỡ bỏ
-if exist "{install_dir}\\bin\\disk-investigator-setup.exe" (
-    "{install_dir}\\bin\\disk-investigator-setup.exe" --uninstall --silent
+if exist "{lifecycle_setup_exe}" (
+    "{lifecycle_setup_exe}" --uninstall --silent
 ) else (
     echo [*] Xóa thư mục cài đặt...
+    rd /s /q "{install_dir}\\bin" >nul 2>&1
+    del /f /q "{install_dir}\\README.md" >nul 2>&1
+    del /f /q "{install_dir}\\install_manifest.json" >nul 2>&1
 )
 
 echo.
@@ -428,7 +432,81 @@ def install(
                     skill_backup_path = str(backup_file)
                     print(f"[+] Phát hiện tùy biến người dùng! Đã sao lưu: {backup_file.name}")
                 except Exception as e:
-                    print(f"[!] Cảnh báo: Không thể sao lưu tùy biến: {e}")
+                    print(f"[ERROR] Không thể sao lưu file SKILL.md tùy biến: {e}")
+                    print("[ERROR] HỦY CÀI ĐẶT để bảo vệ tùy biến của người dùng!")
+                    return False
+
+    # Create transactional rollback journal before modifying any destination files
+    old_exe_bak = bin_dir / "disk_investigator.exe.rollback"
+    old_skill_bak = skill_dir / "SKILL.md.rollback"
+    old_docs_bak = install_dir / "README.md.rollback"
+    old_ref_docs_bak = skill_ref_dir / "README.md.rollback"
+    old_manifest_bak = install_dir / "install_manifest.json.rollback"
+    manifest_file = install_dir / "install_manifest.json"
+
+    had_old_exe = target_exe.exists()
+    had_old_skill = target_skill.exists()
+    had_old_docs = target_docs.exists()
+    had_old_ref_docs = target_skill_ref_docs.exists()
+    had_old_manifest = manifest_file.exists()
+
+    try:
+        if had_old_exe:
+            shutil.copy2(target_exe, old_exe_bak)
+        if had_old_skill:
+            shutil.copy2(target_skill, old_skill_bak)
+        if had_old_docs:
+            shutil.copy2(target_docs, old_docs_bak)
+        if had_old_ref_docs:
+            shutil.copy2(target_skill_ref_docs, old_ref_docs_bak)
+        if had_old_manifest:
+            shutil.copy2(manifest_file, old_manifest_bak)
+    except Exception as e:
+        print(f"[ERROR] Không thể tạo rollback journal: {e}")
+        return False
+
+    def perform_rollback(path_added: bool = False) -> None:
+        """Restores previous state and removes partial installations."""
+        print("[!] ĐANG THỰC HIỆN ROLLBACK...")
+        try:
+            if had_old_exe and old_exe_bak.exists():
+                os.replace(str(old_exe_bak), str(target_exe))
+            elif target_exe.exists():
+                target_exe.unlink()
+
+            if had_old_skill and old_skill_bak.exists():
+                os.replace(str(old_skill_bak), str(target_skill))
+            elif target_skill.exists():
+                target_skill.unlink()
+
+            if had_old_docs and old_docs_bak.exists():
+                os.replace(str(old_docs_bak), str(target_docs))
+            elif target_docs.exists():
+                target_docs.unlink()
+
+            if had_old_ref_docs and old_ref_docs_bak.exists():
+                os.replace(str(old_ref_docs_bak), str(target_skill_ref_docs))
+            elif target_skill_ref_docs.exists():
+                target_skill_ref_docs.unlink()
+
+            if had_old_manifest and old_manifest_bak.exists():
+                os.replace(str(old_manifest_bak), str(manifest_file))
+            elif manifest_file.exists():
+                manifest_file.unlink()
+
+            if path_added:
+                remove_bin_from_user_path(bin_dir)
+
+            # Cleanup rollback files
+            for bf in [old_exe_bak, old_skill_bak, old_docs_bak, old_ref_docs_bak, old_manifest_bak]:
+                if bf.exists():
+                    try:
+                        bf.unlink()
+                    except Exception:
+                        pass
+            print("[+] Hoàn tất Rollback. Trạng thái cũ được bảo toàn 100%.")
+        except Exception as re:
+            print(f"[ERROR] Lỗi trong quá trình rollback: {re}")
 
     # Copy files via atomic replace
     try:
@@ -445,17 +523,32 @@ def install(
         # Local docs & skill reference docs
         shutil.copy2(src_readme, target_docs)
         shutil.copy2(src_readme, target_skill_ref_docs)
-        print("[+] Đã cài đặt binary, Skill AI Agent và tài liệu kỹ thuật.")
+
+        # Deploy lifecycle setup binary for self-contained uninstallation/upgrades
+        lifecycle_dir = install_dir / "lifecycle"
+        lifecycle_dir.mkdir(parents=True, exist_ok=True)
+        lifecycle_exe = lifecycle_dir / "disk-investigator-setup.exe"
+        
+        # Determine current running installer binary
+        curr_proc = Path(sys.executable)
+        if curr_proc.name.lower() == "disk-investigator-setup.exe" and curr_proc.exists():
+            shutil.copy2(curr_proc, lifecycle_exe)
+        elif Path(sys.argv[0]).name.lower() == "disk-investigator-setup.exe" and Path(sys.argv[0]).exists():
+            shutil.copy2(Path(sys.argv[0]), lifecycle_exe)
+        else:
+            dev_setup = get_resource_path("disk-investigator-setup.exe")
+            if dev_setup.exists():
+                shutil.copy2(dev_setup, lifecycle_exe)
+
+        print("[+] Đã cài đặt binary, Skill AI Agent, lifecycle engine và tài liệu kỹ thuật.")
     except Exception as e:
         print(f"[ERROR] Gặp lỗi khi ghi tệp hệ thống: {e}")
+        perform_rollback()
         return False
 
     # Step 4: Configure User PATH
     print("[4/6] Cập nhật biến môi trường User PATH (Registry an toàn)...")
     path_ok = add_bin_to_user_path(bin_dir)
-    if not path_ok:
-        print("[!] Cảnh báo: Chưa thể cập nhật tự động PATH. Bạn có thể thêm thủ công:")
-        print(f"    Thêm: {bin_dir} vào biến PATH của tài khoản người dùng.")
 
     # Step 5: Generate uninstaller & manifest
     print("[5/6] Tạo bộ gỡ cài đặt và ghi nhận Install Manifest...")
@@ -482,11 +575,21 @@ def install(
     print("[6/6] Kiểm tra xác thực vận hành (Smoke Test)...")
     smoke_ok = run_smoke_test(target_exe)
 
+    if not smoke_ok:
+        print("[ERROR] Smoke test thất bại! Khởi động quy trình hoàn tác (Rollback)...")
+        perform_rollback(path_added=path_ok)
+        return False
+
+    # Clean up rollback journal on success
+    for bf in [old_exe_bak, old_skill_bak, old_docs_bak, old_ref_docs_bak, old_manifest_bak]:
+        if bf.exists():
+            try:
+                bf.unlink()
+            except Exception:
+                pass
+
     print("\n=======================================================")
-    if smoke_ok:
-        print(f"       CÀI ĐẶT THÀNH CÔNG {APP_DISPLAY_NAME}!       ")
-    else:
-        print(f"       CÀI ĐẶT HOÀN TẤT (Cần kiểm tra cảnh báo)     ")
+    print(f"       CÀI ĐẶT THÀNH CÔNG {APP_DISPLAY_NAME}!       ")
     print("=======================================================")
     print(f"1. Khởi động công cụ:  Mở PowerShell / CMD mới và gõ:")
     print(f"       disk_investigator --help")
@@ -572,6 +675,15 @@ def uninstall(silent: bool = False, purge_data: bool = False) -> bool:
     if manifest_file.exists():
         try:
             manifest_file.unlink()
+        except Exception:
+            pass
+
+    # Remove lifecycle engine if present
+    lifecycle_dir = install_dir / "lifecycle"
+    if lifecycle_dir.exists():
+        try:
+            shutil.rmtree(lifecycle_dir, ignore_errors=True)
+            print(f"[+] Đã xóa lifecycle engine: {lifecycle_dir.name}")
         except Exception:
             pass
 

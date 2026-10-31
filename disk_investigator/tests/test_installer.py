@@ -173,6 +173,41 @@ class TestInstaller(unittest.TestCase):
             "USER CUSTOM CONTENT THAT MUST NOT BE LOST",
         )
 
+    @patch("installer.get_target_directories")
+    @patch("installer.add_bin_to_user_path")
+    @patch("installer.remove_bin_from_user_path")
+    @patch("installer.run_smoke_test")
+    def test_install_rollback_on_smoke_failure(
+        self, mock_smoke, mock_remove_path, mock_add_path, mock_get_dirs
+    ):
+        inst_dir = self.test_root / "install"
+        bin_dir = inst_dir / "bin"
+        skill_dir = self.test_root / "skill"
+        skill_ref_dir = skill_dir / "references"
+        mock_get_dirs.return_value = (inst_dir, bin_dir, skill_dir, skill_ref_dir)
+        mock_add_path.return_value = True
+        mock_remove_path.return_value = True
+        # Smoke test fails!
+        mock_smoke.return_value = False
+
+        inst_dir.mkdir(parents=True, exist_ok=True)
+        bin_dir.mkdir(parents=True, exist_ok=True)
+        skill_dir.mkdir(parents=True, exist_ok=True)
+        skill_ref_dir.mkdir(parents=True, exist_ok=True)
+
+        old_exe = bin_dir / "disk_investigator.exe"
+        old_exe.write_text("PREVIOUS WORKING EXE", encoding="utf-8")
+
+        # Install should fail and return False
+        ok = installer.install(silent=True)
+        self.assertFalse(ok, "Install must return False when smoke test fails")
+
+        # Previous working exe must be restored by rollback
+        self.assertTrue(old_exe.exists())
+        self.assertEqual(old_exe.read_text(encoding="utf-8"), "PREVIOUS WORKING EXE")
+        # PATH removal must have been called
+        mock_remove_path.assert_called_with(bin_dir)
+
 
 if __name__ == "__main__":
     unittest.main()

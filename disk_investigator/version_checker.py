@@ -22,6 +22,7 @@ from typing import Any, Dict, Optional, Tuple
 GITHUB_REPO = "codevcn/disk-cleaner"
 CACHE_TTL_SECONDS = 3600  # Check at most once per hour unless forced
 REQUEST_TIMEOUT_SECONDS = 2.0
+CACHE_SCHEMA_VERSION = 1
 
 
 def parse_semver(ver_str: str) -> Tuple[int, ...]:
@@ -56,8 +57,10 @@ def _get_cache_path() -> Path:
 
 
 def _is_valid_cache(data: Any, expected_repo: str) -> bool:
-    """Validates structure, provenance, and timestamp sanity of cache payload."""
+    """Validates structure, schema version, provenance, and timestamp sanity of cache payload."""
     if not isinstance(data, dict):
+        return False
+    if data.get("schema_version") != CACHE_SCHEMA_VERSION:
         return False
     if data.get("repo") != expected_repo:
         return False
@@ -100,6 +103,7 @@ def check_for_updates(
             pass
 
     result: Dict[str, Any] = {
+        "schema_version": CACHE_SCHEMA_VERSION,
         "status": "checked",
         "update_available": False,
         "current_version": current_version,
