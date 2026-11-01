@@ -153,6 +153,31 @@ class TestActionFramework(unittest.TestCase):
         self.assertEqual(plan.total_items, 1)
         self.assertEqual(plan.items[0].path, cache_dir)
         self.assertEqual(plan.items[0].action_type, ActionType.BROWSER_CACHE_PURGE)
+        self.assertEqual(plan.items[0].artifact_id, "art-clean")
+        self.assertEqual(plan.items[0].domain, "browser")
+        self.assertEqual(plan.items[0].category, "cache")
+        self.assertIsNotNone(plan.items[0].action_binding)
+        self.assertEqual(plan.items[0].action_binding["action"], ActionType.BROWSER_CACHE_PURGE.value)
+
+    def test_plan_item_action_binding_tamper_fails_hmac(self):
+        target_file = os.path.join(self.base, "tamper_target.tmp")
+        with open(target_file, "w") as f:
+            f.write("content")
+
+        planner = PlanGenerator(cache_dir=self.plans_dir)
+        plan = planner.generate_plan(
+            target_root=self.base,
+            candidates=[{"path": target_file, "artifact_type": "temporary", "logical_bytes": 7}],
+        )
+
+        # Adversarially tamper with action_binding without recomputing HMAC
+        plan.items[0].action_binding = {"action": "MALICIOUS_ACTION"}
+
+        executor = SafeExecutor()
+        with self.assertRaises(PlanIntegrityError) as ctx:
+            executor.execute(plan=plan, item_ids=[1], dry_run=False)
+
+        self.assertIn("Plan hash mismatch", str(ctx.exception))
 
 
 if __name__ == "__main__":

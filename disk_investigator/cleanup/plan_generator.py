@@ -132,6 +132,11 @@ def compute_plan_hash(
             "recycle_bin_bytes": item.recycle_bin_bytes,
             "potential_reclaim_bytes": item.potential_reclaim_bytes,
             "warning": item.warning,
+            "artifact_id": item.artifact_id,
+            "source_detector": item.source_detector,
+            "domain": item.domain,
+            "category": item.category,
+            "action_binding": item.action_binding,
         })
 
     payload = {
@@ -202,6 +207,11 @@ class PlanItem:
     recycle_bin_bytes: int
     potential_reclaim_bytes: int
     warning: Optional[str] = None
+    artifact_id: Optional[str] = None
+    source_detector: Optional[str] = None
+    domain: Optional[str] = None
+    category: Optional[str] = None
+    action_binding: Optional[Dict[str, Any]] = None
 
     def to_dict(self) -> Dict[str, Any]:
         return {
@@ -222,6 +232,11 @@ class PlanItem:
             "recycle_bin_bytes": self.recycle_bin_bytes,
             "potential_reclaim_bytes": self.potential_reclaim_bytes,
             "warning": self.warning,
+            "artifact_id": self.artifact_id,
+            "source_detector": self.source_detector,
+            "domain": self.domain,
+            "category": self.category,
+            "action_binding": self.action_binding,
         }
 
     @classmethod
@@ -245,6 +260,11 @@ class PlanItem:
             recycle_bin_bytes=rec,
             potential_reclaim_bytes=pot,
             warning=data.get("warning"),
+            artifact_id=data.get("artifact_id"),
+            source_detector=data.get("source_detector"),
+            domain=data.get("domain"),
+            category=data.get("category"),
+            action_binding=data.get("action_binding"),
         )
 
 
@@ -324,6 +344,11 @@ class PlanGenerator:
                 sz = c.logical_bytes
                 owner_app = c.owner_app
                 warning = None
+                art_id = c.artifact_id
+                source_det = c.source_detector
+                dom = c.domain.value if hasattr(c.domain, "value") else str(c.domain)
+                cat = c.category.value if hasattr(c.category, "value") else str(c.category)
+                cap_id = c.capability_id
 
                 # Hard blocked or review-only items are strictly excluded from cleanup plans
                 if c.recommended_action in (RecommendedAction.BLOCK, RecommendedAction.REVIEW_ONLY):
@@ -336,6 +361,11 @@ class PlanGenerator:
                 sz = c.get("logical_bytes", 0)
                 owner_app = c.get("owner_app")
                 warning = c.get("warning")
+                art_id = c.get("artifact_id")
+                source_det = c.get("source_detector")
+                dom = c.get("domain")
+                cat = c.get("category")
+                cap_id = c.get("capability_id")
 
             # Classify item
             classification = self.classifier.classify(
@@ -405,6 +435,12 @@ class PlanGenerator:
 
             kind_str = determine_node_kind(p).value
 
+            action_binding = {
+                "action": action.value,
+                "owner_app": owner_app,
+                "capability_id": cap_id,
+            }
+
             item = PlanItem(
                 item_id=current_id,
                 path=p,
@@ -419,6 +455,11 @@ class PlanGenerator:
                 recycle_bin_bytes=recycle_b,
                 potential_reclaim_bytes=immediate_b + recycle_b,
                 warning=warning,
+                artifact_id=art_id,
+                source_detector=source_det,
+                domain=dom,
+                category=cat,
+                action_binding=action_binding,
             )
             items.append(item)
             current_id += 1
