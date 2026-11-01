@@ -381,7 +381,7 @@ class TestUninstallEngine(unittest.TestCase):
         traversal_path = self.install_dir / ".." / "outside_dir" / "secret_document.docx"
         manifest_with_escape = {
             "app_name": "DiskInvestigator",
-            "version": "2.3.1",
+            "version": "2.3.2",
             "bin_file": str(traversal_path),
         }
         with open(self.manifest_file, "w", encoding="utf-8") as f:
@@ -395,6 +395,133 @@ class TestUninstallEngine(unittest.TestCase):
             UninstallEngine.is_within_scope(traversal_path, [self.install_dir, self.skill_dir])
         )
         self.assertTrue(outside_secret.exists())
+
+    @patch("disk_investigator.lifecycle.uninstall_core.check_process_state", return_value=ProcessState.NOT_RUNNING)
+    @patch("disk_investigator.lifecycle.uninstall_core.remove_bin_from_user_path", return_value=True)
+    def test_unknown_subdirectory_inside_known_root_is_preserved(self, mock_remove_path, mock_proc):
+        """UNINSTALL-FINAL-04: Unknown subdirectory inside known root is preserved wholly without descent."""
+        custom_subdir = self.install_dir / "cache" / "user_custom_project"
+        custom_subdir.mkdir(parents=True, exist_ok=True)
+        (custom_subdir / "module.py").write_text("print('user code')", encoding="utf-8")
+        (custom_subdir / "data.raw").write_text("raw binary data", encoding="utf-8")
+
+        res = UninstallEngine.execute(
+            purge_data=True,
+            silent=True,
+            install_dir_override=self.install_dir,
+            bin_dir_override=self.bin_dir,
+            skill_dir_override=self.skill_dir,
+        )
+
+        self.assertEqual(res.status, UninstallStatus.SUCCESS)
+        self.assertTrue(custom_subdir.exists(), "Unknown subdirectory must be preserved")
+        self.assertTrue((custom_subdir / "module.py").exists(), "Files inside unknown subdirectory must not be deleted")
+        self.assertTrue((custom_subdir / "data.raw").exists())
+        self.assertIn(str(custom_subdir), res.preserved_paths)
+
+    @patch("disk_investigator.lifecycle.uninstall_core.check_process_state", return_value=ProcessState.NOT_RUNNING)
+    @patch("disk_investigator.lifecycle.uninstall_core.remove_bin_from_user_path", return_value=True)
+    def test_user_json_inside_unknown_subdirectory_is_preserved(self, mock_remove_path, mock_proc):
+        """UNINSTALL-FINAL-04: User JSON files inside unknown subdirectories are preserved (never deleted by extension)."""
+        unknown_subdir = self.install_dir / "cache" / "my_analytics_export"
+        unknown_subdir.mkdir(parents=True, exist_ok=True)
+        user_json = unknown_subdir / "important_metrics.json"
+        user_json.write_text('{"user_metric": 12345}', encoding="utf-8")
+
+        res = UninstallEngine.execute(
+            purge_data=True,
+            silent=True,
+            install_dir_override=self.install_dir,
+            bin_dir_override=self.bin_dir,
+            skill_dir_override=self.skill_dir,
+        )
+
+        self.assertEqual(res.status, UninstallStatus.SUCCESS)
+        self.assertTrue(user_json.exists(), "User JSON file in unknown subdirectory must be preserved")
+        self.assertTrue(unknown_subdir.exists())
+        self.assertIn(str(unknown_subdir), res.preserved_paths)
+
+    @patch("disk_investigator.lifecycle.uninstall_core.check_process_state", return_value=ProcessState.NOT_RUNNING)
+    @patch("disk_investigator.lifecycle.uninstall_core.remove_bin_from_user_path", return_value=True)
+    def test_user_db_inside_known_root_is_preserved_unless_exact_owned_pattern(self, mock_remove_path, mock_proc):
+        """UNINSTALL-FINAL-04: User DB/JSON files inside known root are preserved unless exact tool-owned pattern."""
+        cache_dir = self.install_dir / "cache"
+        cache_dir.mkdir(parents=True, exist_ok=True)
+        user_db = cache_dir / "my_custom_app.db"
+        user_db.write_text("SQLITE HEADER ETC", encoding="utf-8")
+
+        user_audit_json = cache_dir / "audit.json"
+        user_audit_json.write_text('{"audit": "record"}', encoding="utf-8")
+
+        # Legitimate tool snapshot file
+        tool_snap = cache_dir / "snap_123456abcdef.json"
+        tool_snap.write_text('{"tool": "snapshot"}', encoding="utf-8")
+
+        res = UninstallEngine.execute(
+            purge_data=True,
+            silent=True,
+            install_dir_override=self.install_dir,
+            bin_dir_override=self.bin_dir,
+            skill_dir_override=self.skill_dir,
+        )
+
+        self.assertEqual(res.status, UninstallStatus.SUCCESS)
+        self.assertTrue(user_db.exists(), "User DB file in cache/ must be preserved")
+        self.assertTrue(user_audit_json.exists(), "User JSON file not matching tool pattern in cache/ must be preserved")
+        self.assertFalse(tool_snap.exists(), "Tool-owned snap_*.json must be removed")
+        self.assertIn(str(user_db), res.preserved_paths)
+        self.assertIn(str(user_audit_json), res.preserved_paths)
+
+    @patch("disk_investigator.lifecycle.uninstall_core.check_process_state", return_value=ProcessState.NOT_RUNNING)
+    @patch("disk_investigator.lifecycle.uninstall_core.remove_bin_from_user_path", return_value=True)
+    def test_real_windows_junction_escape_is_rejected(self, mock_remove_path, mock_proc):
+        """UNINSTALL-FINAL-06: Real Windows NTFS junction escaping target root is strictly rejected."""
+        outside_sensitive = self.test_root / "outside_sensitive"
+        outside_sensitive.mkdir(parents=True, exist_ok=True)
+        secret_file = outside_sensitive / "secret.json"
+        secret_file.write_text("SENSITIVE FINANCIAL DATA", encoding="utf-8")
+
+        junction_link = self.install_dir / "cache" / "escape_junction"
+        junction_created = False
+
+        if sys.platform == "win32":
+            try:
+                import _winapi
+                _winapi.CreateJunction(str(outside_sensitive), str(junction_link))
+                junction_created = True
+            except Exception:
+                try:
+                    import subprocess
+                    subprocess.run(["cmd", "/c", "mklink", "/J", str(junction_link), str(outside_sensitive)], check=True)
+                    junction_created = True
+                except Exception:
+                    pass
+
+        if not junction_created:
+            try:
+                os.symlink(str(outside_sensitive), str(junction_link), target_is_directory=True)
+                junction_created = True
+            except Exception:
+                self.skipTest("Junction / symlink creation not supported on this platform/filesystem.")
+
+        # Verify scope validation rejects junction target
+        target_path_via_junction = junction_link / "secret.json"
+        allowed_roots = [self.install_dir, self.skill_dir]
+        is_safe = UninstallEngine.is_within_scope(target_path_via_junction, allowed_roots)
+        self.assertFalse(is_safe, "Junction pointing outside allowed roots must fail is_within_scope")
+
+        # Run uninstaller with purge_data=True
+        res = UninstallEngine.execute(
+            purge_data=True,
+            silent=True,
+            install_dir_override=self.install_dir,
+            bin_dir_override=self.bin_dir,
+            skill_dir_override=self.skill_dir,
+        )
+
+        # Invariant: The outside secret file MUST NEVER be touched or deleted!
+        self.assertTrue(secret_file.exists(), "Outside sensitive file behind junction must NEVER be deleted")
+        self.assertEqual(secret_file.read_text(encoding="utf-8"), "SENSITIVE FINANCIAL DATA")
 
     @patch("disk_investigator.lifecycle.uninstall_core.check_process_state", return_value=ProcessState.NOT_RUNNING)
     @patch("disk_investigator.lifecycle.uninstall_core.remove_bin_from_user_path", return_value=False)

@@ -61,4 +61,4 @@
   - Full suite of 140 tests passing 100% green.
 
 ## 4. Current Status
-- **Status**: V2.3.1 Production Hardening Release. Standalone 1-Click Uninstaller with safe self-preservation, post-delete verification, and unknown-file protection. 145/145 unit and integration tests passing.
+- **Status**: V2.3.2 Production Hardening Release. Standalone 1-Click Uninstaller with ownership-aware purge semantics, strict Windows NTFS junction escape validation, safe self-preservation, post-delete verification, and unknown-file protection. 149/149 unit and integration tests passing.

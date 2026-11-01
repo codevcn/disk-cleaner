@@ -6,11 +6,12 @@ Guarantees:
 - Safe preflight checks (process active check, fail-closed on UNKNOWN, manifest scope validation).
 - Never terminates user processes.
 - Never deletes unknown user files (even with --purge-data or inside known directories).
+- Ownership-aware purge semantics: unknown subdirectories inside known roots are preserved wholly without descent.
 - Self-preservation: uninstaller NEVER deletes itself or the directory tree containing it.
 - Preserves customized SKILL.md and user backup files.
 - Never performs recursive raw destructive directory deletes (no blind rmtree).
 - Post-delete verification before reporting removal (zero false SUCCESS).
-- Strict junction/reparse point canonicalization against target roots.
+- Strict junction/reparse point canonicalization against target roots (blocks junction escape attacks).
 - Reports typed UninstallResult with standard exit codes (0=SUCCESS, 1=FAILED, 2=CANCELLED, 3=PARTIAL, 4=BLOCKED).
 """
 
@@ -36,6 +37,13 @@ from .common import (
     remove_bin_from_user_path,
 )
 from .models import UninstallResult, UninstallStatus
+
+# Explicit known nested subdirectories inside tool-owned directories
+KNOWN_NESTED_SUBDIRS: Set[str] = {
+    "snapshots",
+    "plans",
+    "updates",
+}
 
 
 def is_self_or_ancestor_of_self(path: Path) -> bool:
@@ -67,6 +75,27 @@ def is_self_or_ancestor_of_self(path: Path) -> bool:
         return False
     except Exception:
         return False
+
+
+def is_known_tool_owned_file(file_path: Path) -> bool:
+    """
+    Checks if a file strictly matches the explicit ownership schema of Disk Investigator.
+    Never uses broad extension matching (e.g. arbitrary .db or arbitrary .json).
+    """
+    name_lower = file_path.name.lower()
+    if name_lower in {f.lower() for f in KNOWN_OWNED_FILES}:
+        return True
+    if name_lower.endswith(".rollback") or name_lower.endswith(".tmp"):
+        return True
+    if name_lower.endswith(".log"):
+        return True
+    if name_lower in {"cache.db", "update_status.json", "metadata.json", "build_info.json"}:
+        return True
+    if name_lower.startswith("plan_") and name_lower.endswith(".json"):
+        return True
+    if name_lower.startswith("snap_") and name_lower.endswith(".json"):
+        return True
+    return False
 
 
 def safe_delete_file(file_path: Path, result: UninstallResult, allowed_roots: List[Path]) -> bool:
@@ -108,9 +137,18 @@ def safe_clean_owned_directory(
     Safely cleans a known tool-owned directory without blindly destroying unknown user files.
     Recursively removes known tool artifacts and removes the directory only if completely empty.
     Preserves unknown user files and protects any folder containing the running executable.
+    Never descends into unknown subdirectories or out-of-scope junctions.
     """
     if not dir_path.exists() or not dir_path.is_dir():
         return
+
+    # Junction / Symlink protection: never descend into junctions pointing out-of-scope
+    if dir_path.is_symlink():
+        if not UninstallEngine.is_within_scope(dir_path, allowed_roots):
+            result.warnings.append(
+                f"Cảnh báo bảo mật: Junction/symlink trỏ ra ngoài phạm vi cho phép: {dir_path}. Không duyệt qua."
+            )
+            return
 
     if not UninstallEngine.is_within_scope(dir_path, allowed_roots):
         result.warnings.append(f"Cảnh báo bảo mật: Thư mục ngoài phạm vi an toàn: {dir_path}")
@@ -126,25 +164,33 @@ def safe_clean_owned_directory(
             result.preserved_paths.append(str(child))
             continue
 
+        # Check junction / symlink on child
+        if child.is_symlink():
+            if not UninstallEngine.is_within_scope(child, allowed_roots):
+                result.warnings.append(
+                    f"Cảnh báo bảo mật: Bỏ qua junction/symlink trỏ ra ngoài phạm vi: {child}."
+                )
+                continue
+
         if child.is_file():
-            child_name = child.name.lower()
-            is_known = (
-                child_name in {f.lower() for f in KNOWN_OWNED_FILES}
-                or child.suffix.lower() in {".log", ".json", ".db", ".tmp", ".cache", ".bak", ".rollback", ".exe", ".cmd"}
-                or child.name.startswith("plan_")
-                or child.name.startswith("snap_")
-                or child.name.startswith("run_")
-                or child.name.startswith("metadata")
-            )
-            if is_known:
+            if is_known_tool_owned_file(child):
                 safe_delete_file(child, result, allowed_roots)
             else:
                 result.preserved_paths.append(str(child))
                 result.warnings.append(
-                    f"Phát hiện tệp không thuộc sở hữu công cụ trong {dir_path.name}: {child.name}. Bảo toàn an toàn."
+                    f"Phát hiện tệp không thuộc sở hữu công cụ: {child.name}. Bảo toàn an toàn."
                 )
         elif child.is_dir():
-            safe_clean_owned_directory(child, result, allowed_roots)
+            child_name_lower = child.name.lower()
+            if child_name_lower in KNOWN_NESTED_SUBDIRS:
+                # Explicit known nested schema -> descend and safely clean
+                safe_clean_owned_directory(child, result, allowed_roots)
+            else:
+                # UNKNOWN SUBDIRECTORY -> PRESERVE WHOLE TREE, DO NOT DESCEND!
+                result.preserved_paths.append(str(child))
+                result.warnings.append(
+                    f"Phát hiện thư mục con không thuộc sở hữu công cụ trong {dir_path.name}: {child.name}. Bảo toàn toàn bộ cây thư mục."
+                )
 
     # Only remove dir_path if empty and not self/ancestor
     try:
@@ -409,7 +455,7 @@ class UninstallEngine:
                         if item_name_lower in KNOWN_OWNED_SUBDIRS:
                             safe_clean_owned_directory(item, result, allowed_roots)
                         else:
-                            # Preserve unknown directory!
+                            # Preserve unknown directory wholly!
                             result.preserved_paths.append(str(item))
                             result.warnings.append(
                                 f"Phát hiện thư mục không thuộc sở hữu công cụ: {item.name}. Bảo toàn an toàn."
