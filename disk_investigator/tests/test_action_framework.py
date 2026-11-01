@@ -102,7 +102,8 @@ class TestActionFramework(unittest.TestCase):
         executor = SafeExecutor()
 
         # Simulate browser running (e.g. chrome.exe is active)
-        with patch("disk_investigator.cleanup.action_registry.is_process_running", return_value=True):
+        from disk_investigator.cleanup.action_registry import ProcessState
+        with patch("disk_investigator.cleanup.action_registry.check_process_state", return_value=ProcessState.RUNNING):
             res = executor.execute(plan=plan, item_ids=[1], dry_run=False)
             self.assertEqual(res.succeeded_count, 0)
             self.assertEqual(res.failed_count, 1)

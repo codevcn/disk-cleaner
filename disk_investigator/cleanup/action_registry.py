@@ -163,7 +163,7 @@ class BrowserCacheHandler(BaseActionHandler):
     def execute(self, item: Any, dry_run: bool = False) -> Dict[str, Any]:
         for proc in self.BLOCKING_PROCESSES:
             state = check_process_state(proc)
-            if state == ProcessState.RUNNING:
+            if state == ProcessState.RUNNING or is_process_running(proc):
                 return {
                     "status": "APP_RUNNING_SKIP",
                     "error": f"Browser process '{proc}' is running. Please close the browser before clearing cache.",
