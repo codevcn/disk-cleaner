@@ -5,11 +5,13 @@ Used identically by installer.py (--uninstall) and standalone uninstaller.py.
 Guarantees:
 - Safe preflight checks (process active check, fail-closed on UNKNOWN, manifest scope validation).
 - Never terminates user processes.
-- Never deletes unknown user files (even with --purge-data).
+- Never deletes unknown user files (even with --purge-data or inside known directories).
+- Self-preservation: uninstaller NEVER deletes itself or the directory tree containing it.
 - Preserves customized SKILL.md and user backup files.
-- Never performs recursive raw destructive directory deletes.
-- Does not attempt self-deletion tricks.
-- Reports typed UninstallResult with standard exit codes.
+- Never performs recursive raw destructive directory deletes (no blind rmtree).
+- Post-delete verification before reporting removal (zero false SUCCESS).
+- Strict junction/reparse point canonicalization against target roots.
+- Reports typed UninstallResult with standard exit codes (0=SUCCESS, 1=FAILED, 2=CANCELLED, 3=PARTIAL, 4=BLOCKED).
 """
 
 from __future__ import annotations
@@ -36,6 +38,128 @@ from .common import (
 from .models import UninstallResult, UninstallStatus
 
 
+def is_self_or_ancestor_of_self(path: Path) -> bool:
+    """
+    Checks if a given path is the currently executing file or an ancestor directory of it.
+    Prevents self-deletion in all modes (UNINSTALL-FINAL-11).
+    """
+    try:
+        resolved = path.resolve()
+        current_exe = Path(sys.executable).resolve()
+        if resolved == current_exe:
+            return True
+        try:
+            current_exe.relative_to(resolved)
+            return True
+        except ValueError:
+            pass
+
+        if sys.argv and sys.argv[0]:
+            argv_exe = Path(sys.argv[0]).resolve()
+            if resolved == argv_exe:
+                return True
+            try:
+                argv_exe.relative_to(resolved)
+                return True
+            except ValueError:
+                pass
+
+        return False
+    except Exception:
+        return False
+
+
+def safe_delete_file(file_path: Path, result: UninstallResult, allowed_roots: List[Path]) -> bool:
+    """
+    Safely deletes a single file with scope validation, self-preservation check,
+    and post-delete verification. Never reports removed_paths without verification.
+    """
+    if not file_path.exists():
+        return True
+
+    if not UninstallEngine.is_within_scope(file_path, allowed_roots):
+        result.warnings.append(
+            f"Cảnh báo bảo mật: Bỏ qua tệp ngoài phạm vi an toàn: {file_path}"
+        )
+        return False
+
+    if is_self_or_ancestor_of_self(file_path):
+        result.preserved_paths.append(str(file_path))
+        return False
+
+    try:
+        file_path.unlink()
+        if file_path.exists():
+            result.errors.append(f"Tệp vẫn tồn tại sau thao tác xóa (có thể đang bị khóa): {file_path.name}")
+            return False
+        result.removed_paths.append(str(file_path))
+        return True
+    except Exception as e:
+        result.errors.append(f"Lỗi khi xóa tệp {file_path.name}: {e}")
+        return False
+
+
+def safe_clean_owned_directory(
+    dir_path: Path,
+    result: UninstallResult,
+    allowed_roots: List[Path],
+) -> None:
+    """
+    Safely cleans a known tool-owned directory without blindly destroying unknown user files.
+    Recursively removes known tool artifacts and removes the directory only if completely empty.
+    Preserves unknown user files and protects any folder containing the running executable.
+    """
+    if not dir_path.exists() or not dir_path.is_dir():
+        return
+
+    if not UninstallEngine.is_within_scope(dir_path, allowed_roots):
+        result.warnings.append(f"Cảnh báo bảo mật: Thư mục ngoài phạm vi an toàn: {dir_path}")
+        return
+
+    # If the directory is self or contains self, preserve it and only clean non-self children
+    is_self_tree = is_self_or_ancestor_of_self(dir_path)
+    if is_self_tree:
+        result.preserved_paths.append(str(dir_path))
+
+    for child in list(dir_path.iterdir()):
+        if is_self_or_ancestor_of_self(child):
+            result.preserved_paths.append(str(child))
+            continue
+
+        if child.is_file():
+            child_name = child.name.lower()
+            is_known = (
+                child_name in {f.lower() for f in KNOWN_OWNED_FILES}
+                or child.suffix.lower() in {".log", ".json", ".db", ".tmp", ".cache", ".bak", ".rollback", ".exe", ".cmd"}
+                or child.name.startswith("plan_")
+                or child.name.startswith("snap_")
+                or child.name.startswith("run_")
+                or child.name.startswith("metadata")
+            )
+            if is_known:
+                safe_delete_file(child, result, allowed_roots)
+            else:
+                result.preserved_paths.append(str(child))
+                result.warnings.append(
+                    f"Phát hiện tệp không thuộc sở hữu công cụ trong {dir_path.name}: {child.name}. Bảo toàn an toàn."
+                )
+        elif child.is_dir():
+            safe_clean_owned_directory(child, result, allowed_roots)
+
+    # Only remove dir_path if empty and not self/ancestor
+    try:
+        if dir_path.exists() and not any(dir_path.iterdir()) and not is_self_tree:
+            dir_path.rmdir()
+            if not dir_path.exists():
+                result.removed_paths.append(str(dir_path))
+            else:
+                result.warnings.append(f"Không thể xóa thư mục rỗng {dir_path.name}.")
+        elif dir_path.exists() and not is_self_tree:
+            result.preserved_paths.append(str(dir_path))
+    except Exception as e:
+        result.warnings.append(f"Lỗi khi xóa thư mục {dir_path.name}: {e}")
+
+
 class UninstallEngine:
     """Core transactional uninstallation engine."""
 
@@ -43,13 +167,15 @@ class UninstallEngine:
     def is_within_scope(path: Path, allowed_roots: List[Path]) -> bool:
         """
         Validates that a path resides strictly within one of the allowed roots.
+        Canonicalizes reparse points, symlinks, and junctions before checking.
         Prevents path traversal or destructive deletion of arbitrary system files.
         """
         try:
-            resolved = path.resolve()
+            resolved = path.resolve(strict=False)
             for root in allowed_roots:
+                resolved_root = root.resolve(strict=False)
                 try:
-                    resolved.relative_to(root.resolve())
+                    resolved.relative_to(resolved_root)
                     return True
                 except ValueError:
                     continue
@@ -171,7 +297,7 @@ class UninstallEngine:
         path_ok = remove_bin_from_user_path(bin_dir)
         result.path_removed = path_ok
         if not path_ok and sys.platform == "win32":
-            result.errors.append("Không thể cập nhật Registry User PATH.")
+            result.errors.append("Không thể gỡ bỏ thư mục bin khỏi Registry User PATH.")
 
         # Step 2: Handle Antigravity Skill
         if not silent:
@@ -190,28 +316,22 @@ class UninstallEngine:
                         print(f"[*] Phát hiện tùy chỉnh người dùng trong SKILL.md. Giữ lại tệp để bảo toàn:")
                         print(f"    {target_skill}")
                 else:
-                    try:
-                        target_skill.unlink()
+                    skill_deleted = safe_delete_file(target_skill, result, allowed_roots)
+                    if skill_deleted:
                         result.skill_removed = True
-                        result.removed_paths.append(str(target_skill))
                         if not silent:
                             print(f"[+] Đã gỡ bỏ Skill: {target_skill}")
-                    except Exception as e:
-                        result.errors.append(f"Không thể xóa Skill: {e}")
             else:
                 # Conservative fallback: manifest missing or has no hash
                 default_skill = get_resource_path("SKILL.md")
                 if default_skill.exists():
                     default_hash = compute_sha256(default_skill)
                     if curr_skill_hash == default_hash:
-                        try:
-                            target_skill.unlink()
+                        skill_deleted = safe_delete_file(target_skill, result, allowed_roots)
+                        if skill_deleted:
                             result.skill_removed = True
-                            result.removed_paths.append(str(target_skill))
                             if not silent:
                                 print(f"[+] Đã gỡ bỏ Skill (theo default hash): {target_skill}")
-                        except Exception as e:
-                            result.errors.append(f"Không thể xóa Skill: {e}")
                     else:
                         result.skill_preserved = True
                         result.preserved_paths.append(str(target_skill))
@@ -227,11 +347,7 @@ class UninstallEngine:
         # Check references/README.md
         target_skill_ref_docs = skill_ref_dir / "README.md"
         if target_skill_ref_docs.exists() and cls.is_within_scope(target_skill_ref_docs, allowed_roots):
-            try:
-                target_skill_ref_docs.unlink()
-                result.removed_paths.append(str(target_skill_ref_docs))
-            except Exception:
-                pass
+            safe_delete_file(target_skill_ref_docs, result, allowed_roots)
 
         # Preserve any user backups (SKILL.md.user-backup-*)
         if skill_dir.exists():
@@ -254,67 +370,31 @@ class UninstallEngine:
             print("[3/4] Xóa tệp nhị phân và tài nguyên...")
 
         target_exe = bin_dir / "disk_investigator.exe"
-        if target_exe.exists() and cls.is_within_scope(target_exe, allowed_roots):
-            try:
-                target_exe.unlink()
+        if target_exe.exists():
+            bin_deleted = safe_delete_file(target_exe, result, allowed_roots)
+            if bin_deleted:
                 result.binary_removed = True
-                result.removed_paths.append(str(target_exe))
                 if not silent:
                     print(f"[+] Đã xóa: {target_exe.name}")
-            except Exception as e:
-                result.errors.append(f"Không thể xóa tệp executable {target_exe.name}: {e}")
+            else:
+                result.errors.append(f"Không thể xóa tệp executable chính: {target_exe.name}")
 
         docs_file = install_dir / "README.md"
-        if docs_file.exists() and cls.is_within_scope(docs_file, allowed_roots):
-            try:
-                docs_file.unlink()
-                result.removed_paths.append(str(docs_file))
-            except Exception:
-                pass
+        if docs_file.exists():
+            safe_delete_file(docs_file, result, allowed_roots)
 
         uninst_cmd = install_dir / "uninstall.cmd"
-        if uninst_cmd.exists() and cls.is_within_scope(uninst_cmd, allowed_roots):
-            try:
-                uninst_cmd.unlink()
-                result.removed_paths.append(str(uninst_cmd))
-            except Exception:
-                pass
+        if uninst_cmd.exists():
+            safe_delete_file(uninst_cmd, result, allowed_roots)
 
         manifest_file = install_dir / "install_manifest.json"
-        if manifest_file.exists() and cls.is_within_scope(manifest_file, allowed_roots):
-            try:
-                manifest_file.unlink()
-                result.removed_paths.append(str(manifest_file))
-            except Exception:
-                pass
+        if manifest_file.exists():
+            safe_delete_file(manifest_file, result, allowed_roots)
 
-        # Lifecycle directory: UNINSTALL-FINAL-11 (never delete currently running executable)
+        # Lifecycle directory: UNINSTALL-FINAL-11 (never delete currently running executable or self-tree)
         lifecycle_dir = install_dir / "lifecycle"
         if lifecycle_dir.exists() and cls.is_within_scope(lifecycle_dir, allowed_roots):
-            current_exe = Path(sys.executable).resolve()
-            argv0_exe = Path(sys.argv[0]).resolve() if sys.argv and sys.argv[0] else None
-
-            for item in list(lifecycle_dir.iterdir()):
-                resolved_item = item.resolve()
-                if resolved_item == current_exe or (argv0_exe and resolved_item == argv0_exe):
-                    result.preserved_paths.append(str(item))
-                    continue
-                try:
-                    if item.is_file():
-                        item.unlink()
-                        result.removed_paths.append(str(item))
-                    elif item.is_dir():
-                        shutil.rmtree(item, ignore_errors=True)
-                        result.removed_paths.append(str(item))
-                except Exception:
-                    pass
-
-            try:
-                if not any(lifecycle_dir.iterdir()):
-                    lifecycle_dir.rmdir()
-                    result.removed_paths.append(str(lifecycle_dir))
-            except Exception:
-                pass
+            safe_clean_owned_directory(lifecycle_dir, result, allowed_roots)
 
         # Step 4: Handle Data & Cleanup
         if not silent:
@@ -327,11 +407,7 @@ class UninstallEngine:
                     item_name_lower = item.name.lower()
                     if item.is_dir():
                         if item_name_lower in KNOWN_OWNED_SUBDIRS:
-                            try:
-                                shutil.rmtree(item, ignore_errors=True)
-                                result.removed_paths.append(str(item))
-                            except Exception as e:
-                                result.warnings.append(f"Không thể xóa thư mục {item.name}: {e}")
+                            safe_clean_owned_directory(item, result, allowed_roots)
                         else:
                             # Preserve unknown directory!
                             result.preserved_paths.append(str(item))
@@ -340,11 +416,7 @@ class UninstallEngine:
                             )
                     elif item.is_file():
                         if item_name_lower in KNOWN_OWNED_FILES:
-                            try:
-                                item.unlink()
-                                result.removed_paths.append(str(item))
-                            except Exception:
-                                pass
+                            safe_delete_file(item, result, allowed_roots)
                         else:
                             # Preserve unknown file!
                             result.preserved_paths.append(str(item))
@@ -352,9 +424,13 @@ class UninstallEngine:
                                 f"Phát hiện tệp không thuộc sở hữu công cụ: {item.name}. Bảo toàn an toàn."
                             )
 
-                # Remove install_dir only if completely empty
+                # Remove install_dir only if completely empty and not self-tree
                 try:
-                    if install_dir.exists() and not any(install_dir.iterdir()):
+                    if (
+                        install_dir.exists()
+                        and not any(install_dir.iterdir())
+                        and not is_self_or_ancestor_of_self(install_dir)
+                    ):
                         install_dir.rmdir()
                         result.removed_paths.append(str(install_dir))
                     elif install_dir.exists():
@@ -364,7 +440,7 @@ class UninstallEngine:
         else:
             # Default mode: Preserve runtime data (cache, logs, plans, etc.)
             try:
-                if bin_dir.exists() and not any(bin_dir.iterdir()):
+                if bin_dir.exists() and not any(bin_dir.iterdir()) and not is_self_or_ancestor_of_self(bin_dir):
                     bin_dir.rmdir()
                     result.removed_paths.append(str(bin_dir))
             except Exception:
@@ -374,7 +450,7 @@ class UninstallEngine:
                 if not silent:
                     print(f"[*] Đã hoàn tất gỡ cài đặt. Dữ liệu báo cáo/cache được giữ lại tại: {install_dir}")
 
-        # Final Status Resolution (UNINSTALL-FINAL-13)
+        # Final Status Resolution (UNINSTALL-FINAL-13: ZERO FALSE SUCCESS)
         if result.errors:
             if result.binary_removed or result.path_removed:
                 result.status = UninstallStatus.PARTIAL

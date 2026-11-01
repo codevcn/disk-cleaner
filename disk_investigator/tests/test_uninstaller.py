@@ -322,6 +322,121 @@ class TestUninstallEngine(unittest.TestCase):
 
     @patch("disk_investigator.lifecycle.uninstall_core.check_process_state", return_value=ProcessState.NOT_RUNNING)
     @patch("disk_investigator.lifecycle.uninstall_core.remove_bin_from_user_path", return_value=True)
+    def test_uninstaller_never_deletes_itself_under_purge(self, mock_remove_path, mock_proc):
+        """UNINSTALL-FINAL-11: Running executable in lifecycle is preserved even under --purge-data."""
+        running_uninstaller = self.lifecycle_dir / "disk-investigator-uninstall.exe"
+        running_uninstaller.write_text("RUNNING UNINSTALLER BINARY", encoding="utf-8")
+
+        with patch("sys.executable", str(running_uninstaller)):
+            res = UninstallEngine.execute(
+                purge_data=True,
+                silent=True,
+                install_dir_override=self.install_dir,
+                bin_dir_override=self.bin_dir,
+                skill_dir_override=self.skill_dir,
+            )
+
+        self.assertEqual(res.status, UninstallStatus.SUCCESS)
+        self.assertTrue(running_uninstaller.exists(), "Running executable must be preserved under purge")
+        self.assertTrue(self.lifecycle_dir.exists(), "Directory containing running executable must be preserved")
+        self.assertTrue(self.install_dir.exists(), "Install directory containing running executable must be preserved")
+        self.assertIn(str(running_uninstaller), res.preserved_paths)
+
+    @patch("disk_investigator.lifecycle.uninstall_core.check_process_state", return_value=ProcessState.NOT_RUNNING)
+    @patch("disk_investigator.lifecycle.uninstall_core.remove_bin_from_user_path", return_value=True)
+    def test_unknown_file_inside_known_dir_is_preserved(self, mock_remove_path, mock_proc):
+        """UNINSTALL-FINAL-04: Unknown user file inside known owned directory is preserved."""
+        logs_dir = self.install_dir / "logs"
+        logs_dir.mkdir(parents=True, exist_ok=True)
+        user_log_note = logs_dir / "my_custom_incident_report.txt"
+        user_log_note.write_text("CRITICAL USER INCIDENT NOTE", encoding="utf-8")
+
+        cache_dir = self.install_dir / "cache"
+        cache_dir.mkdir(parents=True, exist_ok=True)
+        user_cache_model = cache_dir / "custom_model.weights"
+        user_cache_model.write_text("CUSTOM MODEL DATA", encoding="utf-8")
+
+        res = UninstallEngine.execute(
+            purge_data=True,
+            silent=True,
+            install_dir_override=self.install_dir,
+            bin_dir_override=self.bin_dir,
+            skill_dir_override=self.skill_dir,
+        )
+
+        self.assertEqual(res.status, UninstallStatus.SUCCESS)
+        self.assertTrue(user_log_note.exists(), "Unknown user file in logs/ must be preserved")
+        self.assertTrue(user_cache_model.exists(), "Unknown user file in cache/ must be preserved")
+        self.assertTrue(logs_dir.exists(), "Logs dir containing unknown user file must not be removed")
+        self.assertTrue(cache_dir.exists(), "Cache dir containing unknown user file must not be removed")
+        self.assertIn(str(user_log_note), res.preserved_paths)
+        self.assertIn(str(user_cache_model), res.preserved_paths)
+
+    def test_manifest_reparse_escape_is_rejected(self):
+        """UNINSTALL-FINAL-06: Manifest path escaping via reparse/symlink/relative escape is rejected."""
+        outside_secret = self.test_root / "outside_dir" / "secret_document.docx"
+        outside_secret.parent.mkdir(parents=True, exist_ok=True)
+        outside_secret.write_text("CONFIDENTIAL", encoding="utf-8")
+
+        traversal_path = self.install_dir / ".." / "outside_dir" / "secret_document.docx"
+        manifest_with_escape = {
+            "app_name": "DiskInvestigator",
+            "version": "2.3.1",
+            "bin_file": str(traversal_path),
+        }
+        with open(self.manifest_file, "w", encoding="utf-8") as f:
+            json.dump(manifest_with_escape, f)
+
+        can_proceed, status, errors, warnings = UninstallEngine.preflight_check(
+            self.install_dir, self.bin_dir, self.skill_dir
+        )
+        self.assertTrue(any("ngoài phạm vi" in w for w in warnings))
+        self.assertFalse(
+            UninstallEngine.is_within_scope(traversal_path, [self.install_dir, self.skill_dir])
+        )
+        self.assertTrue(outside_secret.exists())
+
+    @patch("disk_investigator.lifecycle.uninstall_core.check_process_state", return_value=ProcessState.NOT_RUNNING)
+    @patch("disk_investigator.lifecycle.uninstall_core.remove_bin_from_user_path", return_value=False)
+    def test_path_removal_failure_not_reported_as_success(self, mock_remove_path, mock_proc):
+        """UNINSTALL-FINAL-13: PATH removal failure reports PARTIAL or FAILED, never SUCCESS."""
+        res = UninstallEngine.execute(
+            purge_data=False,
+            silent=True,
+            install_dir_override=self.install_dir,
+            bin_dir_override=self.bin_dir,
+            skill_dir_override=self.skill_dir,
+        )
+        self.assertNotEqual(res.status, UninstallStatus.SUCCESS)
+        self.assertIn(res.status, [UninstallStatus.PARTIAL, UninstallStatus.FAILED])
+        self.assertIn(res.exit_code, [1, 3])
+        self.assertTrue(any("PATH" in err for err in res.errors))
+
+    @patch("disk_investigator.lifecycle.uninstall_core.check_process_state", return_value=ProcessState.NOT_RUNNING)
+    @patch("disk_investigator.lifecycle.uninstall_core.remove_bin_from_user_path", return_value=True)
+    def test_binary_delete_failure_reports_partial_or_failed(self, mock_remove_path, mock_proc):
+        """UNINSTALL-FINAL-13: Binary deletion failure reports PARTIAL or FAILED, never SUCCESS."""
+        with patch("disk_investigator.lifecycle.uninstall_core.safe_delete_file") as mock_del:
+            def fake_del(f_path, res, roots):
+                if "disk_investigator.exe" in str(f_path):
+                    res.errors.append("File locked by system")
+                    return False
+                return True
+            mock_del.side_effect = fake_del
+
+            res = UninstallEngine.execute(
+                purge_data=False,
+                silent=True,
+                install_dir_override=self.install_dir,
+                bin_dir_override=self.bin_dir,
+                skill_dir_override=self.skill_dir,
+            )
+            self.assertNotEqual(res.status, UninstallStatus.SUCCESS)
+            self.assertIn(res.status, [UninstallStatus.PARTIAL, UninstallStatus.FAILED])
+            self.assertFalse(res.binary_removed)
+
+    @patch("disk_investigator.lifecycle.uninstall_core.check_process_state", return_value=ProcessState.NOT_RUNNING)
+    @patch("disk_investigator.lifecycle.uninstall_core.remove_bin_from_user_path", return_value=True)
     def test_uninstall_is_idempotent(self, mock_remove_path, mock_proc):
         """UNINSTALL-FINAL-02: Executing uninstall repeatedly succeeds idempotently."""
         res1 = UninstallEngine.execute(

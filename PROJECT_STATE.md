@@ -61,4 +61,4 @@
   - Full suite of 140 tests passing 100% green.
 
 ## 4. Current Status
-- **Status**: V2.3.0 Production Release. General-Purpose Windows AI Storage Investigator with Standalone 1-Click Uninstaller and Unified Lifecycle Architecture. 140/140 unit and integration tests passing.
+- **Status**: V2.3.1 Production Hardening Release. Standalone 1-Click Uninstaller with safe self-preservation, post-delete verification, and unknown-file protection. 145/145 unit and integration tests passing.
