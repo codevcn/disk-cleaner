@@ -29,7 +29,18 @@
 - [x] Phase 5: Policy Engine & False-Positive Hardening (`artifact_policy.py`, 13 mandatory false-positive tests in `test_false_positives.py`).
 - [x] Phase 6: Typed Action Framework & Plan Schema v2 (`action_types.py`, `action_registry.py`, `schema_version = 2`, HMAC sealing).
 - [x] Phase 7: CLI, Skill & Documentation (`discover-capabilities`, `investigate`, upgraded `cleanup-plan`, updated `SKILL.md`).
-- [x] Comprehensive Test Suite: 114/114 tests passing (100% OK).
+- [x] Hardening Review Gates (V22-FINAL-01 to V22-FINAL-13):
+  - [x] V22-FINAL-01 & 02: Strict allowlist for executable actions in `PlanGenerator` (`KEEP` & `UNINSTALL_VIA_APP` strictly excluded).
+  - [x] V22-FINAL-03: `ArtifactCorrelator` conservative precedence: non-cleanup actions strictly override cleanup.
+  - [x] V22-FINAL-04 & 05: `PlanItem` semantic provenance & `action_binding` sealed with HMAC-SHA256 across all execution fields.
+  - [x] V22-FINAL-06: Target-binding pre-flight verification across Browser, Office, Creator, Gaming, and Streaming caches.
+  - [x] V22-FINAL-07: Tri-state process guards (`RUNNING`, `NOT_RUNNING`, `UNKNOWN`) failing closed on any tasklist error/timeout.
+  - [x] V22-FINAL-08: Detector fault visibility exposing `detector_runs`, `detector_errors`, and `coverage_status` in report.
+  - [x] V22-FINAL-09: Package version set to `2.2.0`.
+  - [x] V22-FINAL-10: Documentation consistency across README, Architecture, Skill, and Project State.
+  - [x] V22-FINAL-11: Full Windows GitHub CI passing.
+  - [x] V22-FINAL-12: CLI smoke tests verified for all V2.2 commands.
+  - [x] V22-FINAL-13: Production release V2.2.0 sign-off.
 
 ## 3. Current Status
-- **Status**: V2.2.0 Transformation Complete. General-Purpose Windows AI Storage Investigator fully operational. 114/114 automated tests passing.
+- **Status**: V2.2.0 Final Production Release. General-Purpose Windows AI Storage Investigator fully operational. All 13 final hardening review gates resolved.

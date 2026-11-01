@@ -136,6 +136,9 @@ def compute_plan_hash(
             "source_detector": item.source_detector,
             "domain": item.domain,
             "category": item.category,
+            "artifact_type": item.artifact_type,
+            "owner_app": item.owner_app,
+            "recommended_action": item.recommended_action,
             "action_binding": item.action_binding,
         })
 
@@ -211,6 +214,9 @@ class PlanItem:
     source_detector: Optional[str] = None
     domain: Optional[str] = None
     category: Optional[str] = None
+    artifact_type: Optional[str] = None
+    owner_app: Optional[str] = None
+    recommended_action: Optional[str] = None
     action_binding: Optional[Dict[str, Any]] = None
 
     def to_dict(self) -> Dict[str, Any]:
@@ -236,6 +242,9 @@ class PlanItem:
             "source_detector": self.source_detector,
             "domain": self.domain,
             "category": self.category,
+            "artifact_type": self.artifact_type,
+            "owner_app": self.owner_app,
+            "recommended_action": self.recommended_action,
             "action_binding": self.action_binding,
         }
 
@@ -264,6 +273,9 @@ class PlanItem:
             source_detector=data.get("source_detector"),
             domain=data.get("domain"),
             category=data.get("category"),
+            artifact_type=data.get("artifact_type"),
+            owner_app=data.get("owner_app"),
+            recommended_action=data.get("recommended_action"),
             action_binding=data.get("action_binding"),
         )
 
@@ -337,6 +349,11 @@ class PlanGenerator:
         items: List[PlanItem] = []
         current_id = 1
 
+        EXECUTABLE_RECOMMENDATIONS = {
+            RecommendedAction.TYPED_CLEANUP,
+            RecommendedAction.RECYCLE_KNOWN_CACHE,
+        }
+
         for c in candidates:
             if isinstance(c, StorageArtifact):
                 p = canonicalize_path(c.canonical_path or c.path)
@@ -349,9 +366,16 @@ class PlanGenerator:
                 dom = c.domain.value if hasattr(c.domain, "value") else str(c.domain)
                 cat = c.category.value if hasattr(c.category, "value") else str(c.category)
                 cap_id = c.capability_id
+                rec_action_str = (
+                    c.recommended_action.value
+                    if hasattr(c.recommended_action, "value")
+                    else str(c.recommended_action)
+                )
 
-                # Hard blocked or review-only items are strictly excluded from cleanup plans
-                if c.recommended_action in (RecommendedAction.BLOCK, RecommendedAction.REVIEW_ONLY):
+                # Strict fail-closed allowlist: only explicitly cleanable recommendation actions
+                # can ever be included in an executable cleanup plan.
+                # KEEP, UNINSTALL_VIA_APP, BLOCK, and REVIEW_ONLY are strictly impossible.
+                if c.recommended_action not in EXECUTABLE_RECOMMENDATIONS:
                     continue
                 if c.user_data_probability != UserDataProbability.LOW:
                     continue
@@ -366,6 +390,14 @@ class PlanGenerator:
                 dom = c.get("domain")
                 cat = c.get("category")
                 cap_id = c.get("capability_id")
+                raw_rec = c.get("recommended_action")
+                if raw_rec is not None:
+                    rec_action_str = raw_rec.value if hasattr(raw_rec, "value") else str(raw_rec)
+                    allowed_rec_strs = {r.value for r in EXECUTABLE_RECOMMENDATIONS}
+                    if rec_action_str not in allowed_rec_strs:
+                        continue
+                else:
+                    rec_action_str = RecommendedAction.RECYCLE_KNOWN_CACHE.value
 
             # Classify item
             classification = self.classifier.classify(
@@ -391,6 +423,7 @@ class PlanGenerator:
             action = ActionType.RECYCLE_PATH
             immediate_b = 0
             recycle_b = 0
+            process_guard: List[str] = []
 
             if a_type == "package_cache" and owner_app == "npm":
                 active_npm = get_tool_cache_path("npm")
@@ -416,18 +449,22 @@ class PlanGenerator:
             elif a_type == "browser_cache":
                 action = ActionType.BROWSER_CACHE_PURGE
                 recycle_b = sz
+                process_guard = ["chrome.exe", "msedge.exe", "brave.exe"]
             elif a_type in ("office_file_cache", "teams_cache"):
                 action = ActionType.OFFICE_CACHE_PURGE
                 recycle_b = sz
+                process_guard = ["winword.exe", "excel.exe", "powerpnt.exe", "outlook.exe", "teams.exe", "ms-teams.exe"]
             elif a_type in ("adobe_media_cache", "davinci_render_cache", "capcut_cache"):
                 action = ActionType.CREATOR_CACHE_PURGE
                 recycle_b = sz
+                process_guard = ["Adobe Premiere Pro.exe", "AfterFX.exe", "Resolve.exe", "CapCut.exe"]
             elif a_type in ("steam_shader_cache", "steam_downloading"):
                 action = ActionType.GAMING_CACHE_PURGE
                 recycle_b = sz
             elif a_type in ("obs_log_dir", "obs_crash_dir"):
                 action = ActionType.STREAMING_LOGS_PURGE
                 recycle_b = sz
+                process_guard = ["obs64.exe", "obs32.exe"]
             else:
                 action = ActionType.RECYCLE_PATH
                 # Moving to Recycle Bin does not immediately reclaim disk space on the volume!
@@ -439,6 +476,8 @@ class PlanGenerator:
                 "action": action.value,
                 "owner_app": owner_app,
                 "capability_id": cap_id,
+                "allowed_root": p,
+                "process_guard": process_guard,
             }
 
             item = PlanItem(
@@ -459,6 +498,9 @@ class PlanGenerator:
                 source_detector=source_det,
                 domain=dom,
                 category=cat,
+                artifact_type=a_type,
+                owner_app=owner_app,
+                recommended_action=rec_action_str,
                 action_binding=action_binding,
             )
             items.append(item)

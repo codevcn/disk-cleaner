@@ -72,7 +72,7 @@ The system enforces a strict, layered separation between **Reasoning**, **Ecosys
                       |              Plan Generator (Schema v2)               |
                       |  - Itemized CleanupPlan v2 with HMAC-SHA256 signature |
                       |  - Rejection of overlapping descendant items          |
-                      |  - Typed action binding & pre-flight fingerprinting   |
+                      |  - Semantic provenance & action_binding per PlanItem  |
                       +───────────────────────────────────────────────────────+
                                                  │
                                                  ▼
@@ -84,9 +84,10 @@ The system enforces a strict, layered separation between **Reasoning**, **Ecosys
                       +───────────────────────────────────────────────────────+
                       |     Safe Executor & Action Registry (cleanup/)        |
                       |  - Schema version 2 enforcement (rejects legacy v1)   |
-                      |  - HMAC-SHA256 signature verification                 |
+                      |  - HMAC-SHA256 signature verification over all fields |
+                      |  - Target binding & cache path semantic pre-flight    |
                       |  - TOCTOU mtime & size pre-flight check               |
-                      |  - Process running check: never kills active apps     |
+                      |  - Fail-closed tri-state process guard (never kills)  |
                       |  - Typed handlers: NPM, PIP, Docker, Caches           |
                       |  - Windows Shell Recycle Bin (SHFileOperationW)       |
                       +───────────────────────────────────────────────────────+
@@ -100,11 +101,11 @@ The system enforces a strict, layered separation between **Reasoning**, **Ecosys
 | :--- | :--- | :--- |
 | **Domain Contracts** | `models.py` | Universal definitions: `StorageArtifact`, `Capability`, `DetectionContext`, `Evidence`. Strict fail-closed defaults (`Regenerability.NONE`, `UserDataProbability.HIGH`, `RecoveryCost.IMPOSSIBLE`, `RecommendedAction.REVIEW_ONLY`). |
 | **Capability Discovery** | `discovery/` | Non-invasive detection of 17 application capabilities across 8 domains via `RegistryProbe`, `FileSystemProbe`, and `ExecutableProbe` protocols. |
-| **Detector Registry** | `detectors/registry.py` | Manages extensible `Detector` instances. Enforces fault isolation so one failing detector never crashes the overall scan. |
+| **Detector Registry** | `detectors/registry.py` | Manages extensible `Detector` instances. Enforces fault isolation and fault visibility (complete vs partial coverage reporting). |
 | **Modular Detectors** | `detectors/` | Subpackages for `system`, `browser`, `office`, `creator`, `streaming`, `gaming`, `developer`, `ai_ml`, and `general`. |
-| **Artifact Correlator** | `services/artifact_correlator.py` | Deduplicates artifacts for the same canonical path, resolves conflicting risk/action attributes conservatively, and prevents double-counting nested bytes. |
+| **Artifact Correlator** | `services/artifact_correlator.py` | Deduplicates artifacts for the same canonical path, resolves conflicting risk/action attributes conservatively (non-cleanup actions strictly override cleanup), and prevents double-counting nested bytes. |
 | **Policy Engine** | `classifiers/artifact_policy.py` | 3-tier security guardrails ensuring user documents, original footage, email archives, medical records, and running app caches are protected from deletion. |
-| **Typed Action Framework** | `cleanup/action_registry.py` | Dispatches typed actions (`BROWSER_CACHE_PURGE`, `CREATOR_CACHE_PURGE`, etc.) and enforces process running checks to prevent killing active user apps. |
-| **Plan Generator v2** | `cleanup/plan_generator.py` | Prepares auditable `CleanupPlan` (Schema v2) with cryptographic HMAC-SHA256 signature and eliminates overlapping items. |
-| **Safe Executor** | `cleanup/safe_executor.py` | Enforces Schema v2, verifies HMAC signature, conducts TOCTOU pre-flight verification, and moves files to Windows Recycle Bin via `SHFileOperationW`. |
+| **Typed Action Framework** | `cleanup/action_registry.py` | Dispatches typed actions (`BROWSER_CACHE_PURGE`, `CREATOR_CACHE_PURGE`, etc.) and enforces tri-state process running checks (`check_process_state`) to prevent killing active user apps. |
+| **Plan Generator v2** | `cleanup/plan_generator.py` | Prepares auditable `CleanupPlan` (Schema v2) with cryptographic HMAC-SHA256 signature covering semantic provenance (`artifact_id`, `domain`, `category`, `action_binding`) and eliminates overlapping items. Strict allowlist for executable actions. |
+| **Safe Executor** | `cleanup/safe_executor.py` | Enforces Schema v2, verifies HMAC signature, validates target binding against allowed roots and genuine cache markers, verifies process states (fail-closed skip on RUNNING or UNKNOWN), conducts TOCTOU pre-flight verification, and moves files to Windows Recycle Bin via `SHFileOperationW`. |
 | **Agent Skill** | `skills/disk-cleanup/SKILL.md` | Skill definition providing natural conversational workflows for Antigravity AI agents on Windows 11. |

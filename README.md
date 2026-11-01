@@ -121,8 +121,8 @@ The system strictly hard-blocks cleanup targeting:
 - WSL2 Virtual Hard Disks (`ext4.vhdx`).
 - Non-fixed or mapped network drives (UNC paths, WebDAV, SMB shares).
 
-### 7. Non-Destructive Recycle Bin Only
-No raw permanent deletion (`rmdir /s /q` or `Remove-Item -Force`) is ever performed. All deletions are executed via the native Windows Shell API (`shell32.SHFileOperationW` with `FO_DELETE` and `FOF_ALLOWUNDO`), placing items safely into the **Windows Recycle Bin** where they can be restored if needed.
+### 7. Non-Destructive Recycle Bin & Certified Typed Actions
+No raw permanent deletion (`rmdir /s /q` or `Remove-Item -Force`) is ever performed. All filesystem deletions are executed via the native Windows Shell API (`shell32.SHFileOperationW` with `FO_DELETE` and `FOF_ALLOWUNDO`), placing items safely into the **Windows Recycle Bin** where they can be restored if needed. Ephemeral caches for developer and container environments are reclaimed via certified typed CLI handlers (`npm cache clean --force`, `pip cache purge`, `docker builder prune -f`), and all actions enforce fail-closed process guards ensuring running user applications are never terminated or disturbed.
 
 ---
 
@@ -134,7 +134,7 @@ Disk Investigator provides three tailored distribution methods:
 | :--- | :--- | :--- | :--- |
 | **1-Click All-in-One Installer (Canonical)** | `disk-investigator-setup.exe` | **End-users & AI Agents** | **Zero dependencies, single file**. Installs binary to `%LOCALAPPDATA%\DiskInvestigator\bin`, configures User `PATH` safely via Registry (`winreg`), installs Antigravity Skill (`SKILL.md`), and provides `uninstall.cmd`. |
 | **Standalone Portable EXE** | `.\disk_investigator.exe <command>` | **Advanced CLI Users** | Portable single binary. Zero runtime dependencies. Perfect for portable USB drives or air-gapped systems. |
-| **Python Developer Package** | `python -m disk_investigator <command>` | **Developers & CI/CD** | Full source code with 59 automated unit and destructive tests. |
+| **Python Developer Package** | `python -m disk_investigator <command>` | **Developers & CI/CD** | Full source code with 115+ automated unit and destructive tests. |
 
 ---
 
@@ -534,7 +534,7 @@ User: "Ổ D của tôi sắp đầy, hãy điều tra giúp tôi."
 
 ## Testing & Verification
 
-The test suite includes **44 comprehensive unit and destructive end-to-end tests** covering all safety mechanisms, TOCTOU drift detection, HMAC plan integrity, 8.3 alias defense, and Recycle Bin operations:
+The test suite includes **115+ comprehensive unit, integration, and false-positive boundary tests** covering all 8 storage domains, capability discovery, TOCTOU drift detection, HMAC plan integrity, 8.3 alias defense, Recycle Bin operations, and typed action registry:
 
 ```bash
 # Run full test suite using Python test runner
@@ -542,6 +542,10 @@ python -m unittest discover -s disk_investigator/tests -v
 ```
 
 ### Verified Test Categories:
+- **`TestCapabilities`**: Probe mocking, registry checks, filesystem & executable detection across 17 applications.
+- **`TestMultiDomainDetectors`**: Chromium, Outlook, Office/Teams, Adobe, DaVinci, CapCut, OBS Studio, Steam, Ollama, HuggingFace, DICOM.
+- **`TestFalsePositives`**: 13 mandatory boundary vectors (active OBS recordings, Outlook PST/OST, DaVinci project DBs, Premiere source media, Steam game installs, DICOM medical files).
+- **`TestActionFramework`**: Action registry, tri-state process guards, Schema v2 validation, HMAC sealing of semantic provenance and action binding.
 - **`TestBackends`**: Tests `dust` JSON parsing, native `os.scandir` fallback, partial traversal, and child incomplete flags.
 - **`TestClassifiers`**: Verifies `CLEANABLE`, `REVIEW_REQUIRED`, and `BLOCKED` policy enforcement across OS paths, Cloud Sync roots, and Docker VHDX.
 - **`TestDetectors`**: Tests `DeveloperDetector` (stale `node_modules`, `.venv`), `DockerDetector`, and `LargeFilesDetector`.

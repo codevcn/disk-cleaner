@@ -33,10 +33,12 @@ class CapabilityDiscovery:
         self.reg = registry_probe or WindowsRegistryProbe()
         self.fs = fs_probe or OSFileSystemProbe()
         self.exe = exe_probe or OSExecutableProbe()
+        self.discovery_errors: List[Dict[str, str]] = []
 
     def discover_all(self) -> Dict[str, Capability]:
         """Runs all capability discovery probes and returns active capabilities."""
         caps: Dict[str, Capability] = {}
+        self.discovery_errors = []
 
         discoverers = [
             self._discover_chrome,
@@ -65,6 +67,7 @@ class CapabilityDiscovery:
                     caps[cap.capability_id] = cap
             except Exception as e:
                 # Failure in one capability discovery must never crash the service
+                self.discovery_errors.append({"discoverer": fn.__name__, "error": str(e)})
                 continue
 
         return caps

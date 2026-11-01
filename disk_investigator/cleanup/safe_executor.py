@@ -234,16 +234,72 @@ class SafeExecutor:
             except (OSError, PermissionError) as e:
                 return f"VERIFY_FAILED: Unable to verify resource modification time ({e}). Refusing execution for safety."
 
-        # 6. Typed action target binding verification
+        # 6. Typed action target binding & semantic invariant verification
+        p_lower = p.lower()
         if item.action_type == ActionType.NPM_CACHE_CLEAN:
             active_npm = get_tool_cache_path("npm")
-            if not active_npm or p.lower() != active_npm:
+            if not active_npm or p_lower != active_npm:
                 return f"VERIFY_FAILED: Active npm cache path '{active_npm}' does not match plan target '{p}'. Refusing execution."
 
-        if item.action_type == ActionType.PIP_CACHE_PURGE:
+        elif item.action_type == ActionType.PIP_CACHE_PURGE:
             active_pip = get_tool_cache_path("pip")
-            if not active_pip or p.lower() != active_pip:
+            if not active_pip or p_lower != active_pip:
                 return f"VERIFY_FAILED: Active pip cache path '{active_pip}' does not match plan target '{p}'. Refusing execution."
+
+        elif item.action_type == ActionType.BROWSER_CACHE_PURGE:
+            # Must strictly target cache subpaths, never entire browser profile or root
+            cache_markers = ("cache", "code cache", "gpucache", "grshadercache", "shadercache")
+            path_parts = [part.lower() for part in Path(p).parts]
+            has_cache_marker = any(
+                marker in path_parts or any(part.endswith(marker) for part in path_parts)
+                for marker in cache_markers
+            )
+            if not has_cache_marker:
+                return f"VERIFY_FAILED: Browser cache action target '{p}' does not contain recognized browser cache marker. Refusing execution."
+            # Guard against sensitive user data folders
+            forbidden_markers = ("history", "login data", "cookies", "bookmarks", "sessions", "web data")
+            if Path(p).name.lower() in forbidden_markers:
+                return f"SECURITY REFUSAL: Target '{p}' directly targets sensitive browser profile data. Refusing execution."
+
+        elif item.action_type == ActionType.OFFICE_CACHE_PURGE:
+            path_parts = [part.lower() for part in Path(p).parts]
+            office_markers = ("officefilecache", "blob_storage", "cache", "teams")
+            if not any(marker in path_parts for marker in office_markers):
+                return f"VERIFY_FAILED: Office cache action target '{p}' does not match recognized Office/Teams cache directory. Refusing execution."
+            if p_lower.endswith((".pst", ".ost", ".one", ".docx", ".xlsx", ".pptx")):
+                return f"SECURITY REFUSAL: Target '{p}' is a user document or mailbox file. Refusing execution."
+
+        elif item.action_type == ActionType.CREATOR_CACHE_PURGE:
+            path_parts = [part.lower() for part in Path(p).parts]
+            creator_markers = ("media cache files", "media cache", "peak files", "cacheclip", "cache", "common")
+            if not any(marker in path_parts for marker in creator_markers):
+                return f"VERIFY_FAILED: Creator cache action target '{p}' does not match recognized creator render cache structure. Refusing execution."
+            if p_lower.endswith((".prproj", ".aep", ".resolve", ".drp", ".mp4", ".mov", ".mkv", ".wav")):
+                return f"SECURITY REFUSAL: Target '{p}' contains creative project or media assets. Refusing execution."
+
+        elif item.action_type == ActionType.GAMING_CACHE_PURGE:
+            path_parts = [part.lower() for part in Path(p).parts]
+            if "steamapps" in path_parts and "common" in path_parts:
+                return f"SECURITY REFUSAL: Gaming cache target '{p}' points into steamapps/common installed games directory. Refusing execution."
+            gaming_markers = ("shadercache", "downloading", "temp")
+            if not any(marker in path_parts for marker in gaming_markers):
+                return f"VERIFY_FAILED: Gaming cache target '{p}' is not in recognized game shader or download cache directory. Refusing execution."
+
+        elif item.action_type == ActionType.STREAMING_LOGS_PURGE:
+            path_parts = [part.lower() for part in Path(p).parts]
+            streaming_markers = ("crashes", "logs")
+            if not any(marker in path_parts for marker in streaming_markers):
+                return f"VERIFY_FAILED: Streaming logs target '{p}' is not in recognized logs or crash directory. Refusing execution."
+            if p_lower.endswith((".mkv", ".mp4", ".flv", ".mov", ".ts", ".avi")):
+                return f"SECURITY REFUSAL: Streaming target '{p}' is a video recording file. Refusing execution."
+
+        # 7. Sealed action_binding allowed_root enforcement
+        if item.action_binding and isinstance(item.action_binding, dict):
+            allowed_root = item.action_binding.get("allowed_root")
+            if allowed_root:
+                allowed_canon = canonicalize_path(allowed_root).lower()
+                if p_lower != allowed_canon and not p_lower.startswith(allowed_canon.rstrip("\\/") + "\\"):
+                    return f"SECURITY REFUSAL: Plan target '{p}' deviates from sealed allowed_root '{allowed_root}'."
 
         return None
 

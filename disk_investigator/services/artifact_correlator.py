@@ -32,13 +32,16 @@ class ArtifactCorrelator:
     """
 
     # Precedence hierarchies (higher rank = higher priority/more conservative)
+    # Fail-closed invariant: Non-cleanup actions (BLOCK, KEEP, REVIEW_ONLY, UNINSTALL_VIA_APP)
+    # strictly take precedence over cleanup actions (TYPED_CLEANUP, RECYCLE_KNOWN_CACHE).
+    # If any detector reports KEEP, it must override any detector suggesting cleanup.
     ACTION_PRECEDENCE = {
-        RecommendedAction.BLOCK: 60,
-        RecommendedAction.REVIEW_ONLY: 50,
-        RecommendedAction.UNINSTALL_VIA_APP: 40,
+        RecommendedAction.BLOCK: 100,
+        RecommendedAction.KEEP: 90,
+        RecommendedAction.REVIEW_ONLY: 80,
+        RecommendedAction.UNINSTALL_VIA_APP: 70,
         RecommendedAction.TYPED_CLEANUP: 30,
         RecommendedAction.RECYCLE_KNOWN_CACHE: 20,
-        RecommendedAction.KEEP: 10,
     }
 
     USER_DATA_PRECEDENCE = {

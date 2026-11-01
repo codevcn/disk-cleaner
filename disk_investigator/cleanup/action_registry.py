@@ -12,11 +12,22 @@ import sys
 from abc import ABC, abstractmethod
 from typing import Any, Dict, List, Optional, Protocol, runtime_checkable
 
+from enum import Enum
+
 from .action_types import ActionType
 
 
-def is_process_running(exe_name: str) -> bool:
-    """Check if an executable is actively running on Windows without terminating it."""
+class ProcessState(Enum):
+    NOT_RUNNING = "NOT_RUNNING"
+    RUNNING = "RUNNING"
+    UNKNOWN = "UNKNOWN"
+
+
+def check_process_state(exe_name: str) -> ProcessState:
+    """
+    Check if an executable is actively running on Windows without terminating it.
+    Strict fail-closed: returns ProcessState.UNKNOWN on any error, timeout, or non-zero exit.
+    """
     try:
         proc = subprocess.run(
             ["tasklist", "/FI", f"IMAGENAME eq {exe_name}", "/NH"],
@@ -25,9 +36,22 @@ def is_process_running(exe_name: str) -> bool:
             timeout=3,
             shell=False,
         )
-        return exe_name.lower() in proc.stdout.lower()
+        if proc.returncode != 0:
+            return ProcessState.UNKNOWN
+        stdout = proc.stdout.lower()
+        if exe_name.lower() in stdout:
+            return ProcessState.RUNNING
+        return ProcessState.NOT_RUNNING
     except Exception:
-        return False
+        return ProcessState.UNKNOWN
+
+
+def is_process_running(exe_name: str) -> bool:
+    """
+    Check if an executable is actively running on Windows.
+    Fails closed: returns True if running OR if process state cannot be confirmed.
+    """
+    return check_process_state(exe_name) != ProcessState.NOT_RUNNING
 
 
 @runtime_checkable
@@ -138,10 +162,17 @@ class BrowserCacheHandler(BaseActionHandler):
 
     def execute(self, item: Any, dry_run: bool = False) -> Dict[str, Any]:
         for proc in self.BLOCKING_PROCESSES:
-            if is_process_running(proc):
+            state = check_process_state(proc)
+            if state == ProcessState.RUNNING:
                 return {
                     "status": "APP_RUNNING_SKIP",
                     "error": f"Browser process '{proc}' is running. Please close the browser before clearing cache.",
+                    "bytes_reclaimed": 0,
+                }
+            if state == ProcessState.UNKNOWN:
+                return {
+                    "status": "APP_STATE_UNKNOWN_SKIP",
+                    "error": f"Unable to verify process state for '{proc}' (tasklist error or timeout). Fail-closed skip.",
                     "bytes_reclaimed": 0,
                 }
 
@@ -164,10 +195,17 @@ class OfficeCacheHandler(BaseActionHandler):
 
     def execute(self, item: Any, dry_run: bool = False) -> Dict[str, Any]:
         for proc in self.BLOCKING_PROCESSES:
-            if is_process_running(proc):
+            state = check_process_state(proc)
+            if state == ProcessState.RUNNING:
                 return {
                     "status": "APP_RUNNING_SKIP",
                     "error": f"Office application '{proc}' is running. Skipping cache cleanup.",
+                    "bytes_reclaimed": 0,
+                }
+            if state == ProcessState.UNKNOWN:
+                return {
+                    "status": "APP_STATE_UNKNOWN_SKIP",
+                    "error": f"Unable to verify process state for '{proc}' (tasklist error or timeout). Fail-closed skip.",
                     "bytes_reclaimed": 0,
                 }
 
@@ -195,10 +233,17 @@ class CreatorCacheHandler(BaseActionHandler):
 
     def execute(self, item: Any, dry_run: bool = False) -> Dict[str, Any]:
         for proc in self.BLOCKING_PROCESSES:
-            if is_process_running(proc):
+            state = check_process_state(proc)
+            if state == ProcessState.RUNNING:
                 return {
                     "status": "APP_RUNNING_SKIP",
                     "error": f"Creative application '{proc}' is active. Skipping render cache cleanup.",
+                    "bytes_reclaimed": 0,
+                }
+            if state == ProcessState.UNKNOWN:
+                return {
+                    "status": "APP_STATE_UNKNOWN_SKIP",
+                    "error": f"Unable to verify process state for '{proc}' (tasklist error or timeout). Fail-closed skip.",
                     "bytes_reclaimed": 0,
                 }
 
@@ -214,10 +259,27 @@ class CreatorCacheHandler(BaseActionHandler):
 class GamingCacheHandler(BaseActionHandler):
     """Safely purges Steam shader caches."""
 
+    BLOCKING_PROCESSES = ("steam.exe",)
+
     def can_handle(self, action_type: ActionType) -> bool:
         return action_type == ActionType.GAMING_CACHE_PURGE
 
     def execute(self, item: Any, dry_run: bool = False) -> Dict[str, Any]:
+        for proc in self.BLOCKING_PROCESSES:
+            state = check_process_state(proc)
+            if state == ProcessState.RUNNING:
+                return {
+                    "status": "APP_RUNNING_SKIP",
+                    "error": f"Gaming client '{proc}' is running. Skipping shader cache cleanup.",
+                    "bytes_reclaimed": 0,
+                }
+            if state == ProcessState.UNKNOWN:
+                return {
+                    "status": "APP_STATE_UNKNOWN_SKIP",
+                    "error": f"Unable to verify process state for '{proc}' (tasklist error or timeout). Fail-closed skip.",
+                    "bytes_reclaimed": 0,
+                }
+
         from .safe_executor import send_to_recycle_bin
 
         if dry_run:
@@ -230,16 +292,26 @@ class GamingCacheHandler(BaseActionHandler):
 class StreamingLogsHandler(BaseActionHandler):
     """Safely purges OBS ephemeral logs and crash dumps."""
 
+    BLOCKING_PROCESSES = ("obs64.exe", "obs32.exe")
+
     def can_handle(self, action_type: ActionType) -> bool:
         return action_type == ActionType.STREAMING_LOGS_PURGE
 
     def execute(self, item: Any, dry_run: bool = False) -> Dict[str, Any]:
-        if is_process_running("obs64.exe") or is_process_running("obs32.exe"):
-            return {
-                "status": "APP_RUNNING_SKIP",
-                "error": "OBS Studio is currently active. Skipping logs cleanup.",
-                "bytes_reclaimed": 0,
-            }
+        for proc in self.BLOCKING_PROCESSES:
+            state = check_process_state(proc)
+            if state == ProcessState.RUNNING:
+                return {
+                    "status": "APP_RUNNING_SKIP",
+                    "error": f"OBS Studio ('{proc}') is currently active. Skipping logs cleanup.",
+                    "bytes_reclaimed": 0,
+                }
+            if state == ProcessState.UNKNOWN:
+                return {
+                    "status": "APP_STATE_UNKNOWN_SKIP",
+                    "error": f"Unable to verify process state for '{proc}' (tasklist error or timeout). Fail-closed skip.",
+                    "bytes_reclaimed": 0,
+                }
 
         from .safe_executor import send_to_recycle_bin
 

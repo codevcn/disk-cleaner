@@ -179,6 +179,245 @@ class TestActionFramework(unittest.TestCase):
 
         self.assertIn("Plan hash mismatch", str(ctx.exception))
 
+    def test_plan_generator_strict_allowlist_excludes_keep_and_uninstall(self):
+        """V22-FINAL-01 & V22-FINAL-02: Ensure KEEP and UNINSTALL_VIA_APP are strictly impossible in plan."""
+        f_keep = os.path.join(self.base, "keep.bin")
+        f_uninstall = os.path.join(self.base, "uninstall.bin")
+        f_review = os.path.join(self.base, "review.bin")
+        f_block = os.path.join(self.base, "block.bin")
+        f_typed = os.path.join(self.base, "typed.tmp")
+        f_recycle = os.path.join(self.base, "recycle.tmp")
+
+        for fpath in (f_keep, f_uninstall, f_review, f_block, f_typed, f_recycle):
+            with open(fpath, "w") as f:
+                f.write("data")
+
+        art_keep = StorageArtifact(
+            artifact_id="art-keep",
+            path=f_keep,
+            canonical_path=f_keep,
+            domain=ArtifactDomain.SYSTEM,
+            category=ArtifactCategory.CACHE,
+            artifact_type="temporary",
+            logical_bytes=10,
+            recommended_action=RecommendedAction.KEEP,
+            user_data_probability=UserDataProbability.LOW,
+        )
+        art_uninstall = StorageArtifact(
+            artifact_id="art-uninstall",
+            path=f_uninstall,
+            canonical_path=f_uninstall,
+            domain=ArtifactDomain.DEVELOPER,
+            category=ArtifactCategory.CACHE,
+            artifact_type="temporary",
+            logical_bytes=10,
+            recommended_action=RecommendedAction.UNINSTALL_VIA_APP,
+            user_data_probability=UserDataProbability.LOW,
+        )
+        art_review = StorageArtifact(
+            artifact_id="art-review",
+            path=f_review,
+            canonical_path=f_review,
+            domain=ArtifactDomain.SYSTEM,
+            category=ArtifactCategory.CACHE,
+            artifact_type="temporary",
+            logical_bytes=10,
+            recommended_action=RecommendedAction.REVIEW_ONLY,
+            user_data_probability=UserDataProbability.LOW,
+        )
+        art_block = StorageArtifact(
+            artifact_id="art-block",
+            path=f_block,
+            canonical_path=f_block,
+            domain=ArtifactDomain.SYSTEM,
+            category=ArtifactCategory.CACHE,
+            artifact_type="temporary",
+            logical_bytes=10,
+            recommended_action=RecommendedAction.BLOCK,
+            user_data_probability=UserDataProbability.LOW,
+        )
+        art_typed = StorageArtifact(
+            artifact_id="art-typed",
+            path=f_typed,
+            canonical_path=f_typed,
+            domain=ArtifactDomain.SYSTEM,
+            category=ArtifactCategory.CACHE,
+            artifact_type="temporary",
+            logical_bytes=10,
+            recommended_action=RecommendedAction.TYPED_CLEANUP,
+            user_data_probability=UserDataProbability.LOW,
+        )
+        art_recycle = StorageArtifact(
+            artifact_id="art-recycle",
+            path=f_recycle,
+            canonical_path=f_recycle,
+            domain=ArtifactDomain.SYSTEM,
+            category=ArtifactCategory.CACHE,
+            artifact_type="temporary",
+            logical_bytes=10,
+            recommended_action=RecommendedAction.RECYCLE_KNOWN_CACHE,
+            user_data_probability=UserDataProbability.LOW,
+        )
+
+        planner = PlanGenerator(cache_dir=self.plans_dir)
+        plan = planner.generate_plan(
+            target_root=self.base,
+            candidates=[art_keep, art_uninstall, art_review, art_block, art_typed, art_recycle],
+        )
+
+        # Only TYPED_CLEANUP and RECYCLE_KNOWN_CACHE must be accepted
+        self.assertEqual(plan.total_items, 2)
+        paths_in_plan = {i.path for i in plan.items}
+        self.assertIn(f_typed, paths_in_plan)
+        self.assertIn(f_recycle, paths_in_plan)
+        self.assertNotIn(f_keep, paths_in_plan)
+        self.assertNotIn(f_uninstall, paths_in_plan)
+        self.assertNotIn(f_review, paths_in_plan)
+        self.assertNotIn(f_block, paths_in_plan)
+
+    def test_correlator_keep_takes_precedence_over_typed_cleanup(self):
+        """V22-FINAL-03: Correlator non-cleanup actions strictly take precedence over cleanup actions."""
+        from disk_investigator.services.artifact_correlator import ArtifactCorrelator
+
+        shared_path = os.path.join(self.base, "shared.bin")
+        art_cleanup = StorageArtifact(
+            artifact_id="art-1",
+            path=shared_path,
+            canonical_path=shared_path,
+            domain=ArtifactDomain.DEVELOPER,
+            category=ArtifactCategory.CACHE,
+            artifact_type="build_cache",
+            logical_bytes=1000,
+            recommended_action=RecommendedAction.TYPED_CLEANUP,
+            user_data_probability=UserDataProbability.LOW,
+        )
+        art_keep = StorageArtifact(
+            artifact_id="art-2",
+            path=shared_path,
+            canonical_path=shared_path,
+            domain=ArtifactDomain.CREATOR,
+            category=ArtifactCategory.USER_DOCUMENT,
+            artifact_type="source_media",
+            logical_bytes=1000,
+            recommended_action=RecommendedAction.KEEP,
+            user_data_probability=UserDataProbability.HIGH,
+        )
+
+        correlated = ArtifactCorrelator.correlate([art_cleanup, art_keep])
+        self.assertEqual(len(correlated), 1)
+        self.assertEqual(correlated[0].recommended_action, RecommendedAction.KEEP)
+        self.assertEqual(correlated[0].user_data_probability, UserDataProbability.HIGH)
+
+    def test_process_state_fail_closed_tri_state(self):
+        """V22-FINAL-07: Process guard tri-state fail-closed checks."""
+        from disk_investigator.cleanup.action_registry import (
+            ProcessState,
+            check_process_state,
+            is_process_running,
+        )
+
+        # 1. Process found -> RUNNING
+        with patch("subprocess.run") as mock_sub:
+            mock_sub.return_value.returncode = 0
+            mock_sub.return_value.stdout = "chrome.exe  1234 Console"
+            self.assertEqual(check_process_state("chrome.exe"), ProcessState.RUNNING)
+            self.assertTrue(is_process_running("chrome.exe"))
+
+        # 2. Confirmed not running -> NOT_RUNNING
+        with patch("subprocess.run") as mock_sub:
+            mock_sub.return_value.returncode = 0
+            mock_sub.return_value.stdout = "INFO: No tasks are running which match the specified criteria."
+            self.assertEqual(check_process_state("chrome.exe"), ProcessState.NOT_RUNNING)
+            self.assertFalse(is_process_running("chrome.exe"))
+
+        # 3. Timeout or exception -> UNKNOWN and fail-closed
+        with patch("subprocess.run", side_effect=TimeoutError("tasklist timeout")):
+            self.assertEqual(check_process_state("chrome.exe"), ProcessState.UNKNOWN)
+            # is_process_running fails closed (returns True)
+            self.assertTrue(is_process_running("chrome.exe"))
+
+        # 4. Non-zero exit code -> UNKNOWN and fail-closed
+        with patch("subprocess.run") as mock_sub:
+            mock_sub.return_value.returncode = 1
+            mock_sub.return_value.stdout = ""
+            self.assertEqual(check_process_state("chrome.exe"), ProcessState.UNKNOWN)
+            self.assertTrue(is_process_running("chrome.exe"))
+
+    def test_preflight_target_binding_guards(self):
+        """V22-FINAL-06: Target-binding preflight checks across typed actions."""
+        executor = SafeExecutor()
+
+        # Browser cache purge targeting a root without cache markers
+        bad_browser_item = PlanItem(
+            item_id=1,
+            path=os.path.join(self.base, "AppData", "Local", "Google", "Chrome", "User Data"),
+            expected_kind="directory",
+            candidate_bytes=100,
+            expected_mtime=time.time(),
+            risk=RiskLevel.LOW,
+            disposition=Disposition.CLEANABLE,
+            action_type=ActionType.BROWSER_CACHE_PURGE,
+            description="Bad browser target",
+            immediate_reclaimable_bytes=0,
+            recycle_bin_bytes=100,
+            potential_reclaim_bytes=100,
+        )
+        os.makedirs(bad_browser_item.path, exist_ok=True)
+        err = executor.preflight_check(bad_browser_item)
+        self.assertIsNotNone(err)
+        self.assertIn("does not contain recognized browser cache marker", err)
+
+        # Office cache purge targeting PST file
+        bad_pst_path = os.path.join(self.base, "archive.pst")
+        with open(bad_pst_path, "w") as f:
+            f.write("pst data")
+        bad_office_item = PlanItem(
+            item_id=2,
+            path=bad_pst_path,
+            expected_kind="file",
+            candidate_bytes=8,
+            expected_mtime=time.time(),
+            risk=RiskLevel.LOW,
+            disposition=Disposition.CLEANABLE,
+            action_type=ActionType.OFFICE_CACHE_PURGE,
+            description="Bad office target",
+            immediate_reclaimable_bytes=0,
+            recycle_bin_bytes=8,
+            potential_reclaim_bytes=8,
+        )
+        err = executor.preflight_check(bad_office_item)
+        self.assertIsNotNone(err)
+        self.assertIn("recognized Office/Teams cache directory", err)
+
+    def test_detector_fault_visibility_in_investigation_result(self):
+        """V22-FINAL-08: Detector faults are exposed in InvestigationResult with partial coverage."""
+        from disk_investigator.detectors.base import Detector
+        from disk_investigator.detectors.registry import DetectorRegistry
+        from disk_investigator.services.investigation_service import InvestigationService
+        from disk_investigator.models import DetectionContext
+
+        class FaultyDetector(Detector):
+            detector_id = "test.faulty"
+            name = "Faulty Detector"
+
+            def applicable(self, context):
+                return True
+
+            def detect(self, context):
+                raise PermissionError("Access denied to protected volume")
+
+        registry = DetectorRegistry()
+        registry.register(FaultyDetector())
+
+        svc = InvestigationService(registry=registry)
+        ctx = DetectionContext(target_path=self.base, capabilities={}, env={})
+        res = svc.investigate(target_path=self.base, context=ctx)
+
+        self.assertEqual(res.coverage_status, "partial")
+        self.assertEqual(len(res.detector_errors), 1)
+        self.assertEqual(res.detector_errors[0]["detector_id"], "test.faulty")
+        self.assertIn("Access denied", res.detector_errors[0]["error"])
+
 
 if __name__ == "__main__":
     unittest.main()

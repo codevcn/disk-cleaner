@@ -18,6 +18,8 @@ class DetectorRegistry:
 
     def __init__(self) -> None:
         self._detectors: Dict[str, Detector] = {}
+        self.last_runs: List[Dict[str, Any]] = []
+        self.last_errors: List[Dict[str, str]] = []
 
     def register(self, detector: Detector) -> None:
         """Register a detector instance."""
@@ -54,20 +56,38 @@ class DetectorRegistry:
 
     def run_detectors(self, context: DetectionContext) -> List[StorageArtifact]:
         """
-        Execute all applicable detectors with strict fault isolation.
+        Execute all applicable detectors with strict fault isolation and fault visibility.
         An unhandled exception in one detector will never abort the entire scan.
+        Records execution status and errors for complete coverage reporting.
         """
         all_artifacts: List[StorageArtifact] = []
+        self.last_runs = []
+        self.last_errors = []
         applicable_detectors = self.get_applicable_detectors(context)
 
         for det in applicable_detectors:
             det_id = getattr(det, "detector_id", "unknown")
             try:
                 found = det.detect(context)
+                self.last_runs.append({
+                    "detector_id": det_id,
+                    "status": "complete",
+                    "artifacts": len(found) if found else 0,
+                })
                 if found:
                     all_artifacts.extend(found)
             except Exception as e:
+                err_msg = str(e)
                 logger.error("Detector %s encountered an error during detection: %s", det_id, e)
+                self.last_runs.append({
+                    "detector_id": det_id,
+                    "status": "failed",
+                    "error": err_msg,
+                })
+                self.last_errors.append({
+                    "detector_id": det_id,
+                    "error": err_msg,
+                })
 
         return all_artifacts
 

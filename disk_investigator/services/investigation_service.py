@@ -28,10 +28,14 @@ class InvestigationResult:
     by_domain: Dict[str, int] = field(default_factory=dict)
     by_action: Dict[str, int] = field(default_factory=dict)
     by_category: Dict[str, int] = field(default_factory=dict)
+    detector_runs: List[Dict[str, Any]] = field(default_factory=list)
+    detector_errors: List[Dict[str, str]] = field(default_factory=list)
+    coverage_status: str = "complete"  # "complete" or "partial"
 
     def to_dict(self) -> Dict[str, Any]:
         return {
             "target_path": self.target_path,
+            "coverage_status": self.coverage_status,
             "capabilities_detected": {
                 cap_id: cap.to_dict()
                 for cap_id, cap in self.capabilities.items()
@@ -44,6 +48,8 @@ class InvestigationResult:
             "by_domain": self.by_domain,
             "by_action": self.by_action,
             "by_category": self.by_category,
+            "detector_runs": self.detector_runs,
+            "detector_errors": self.detector_errors,
         }
 
 
@@ -79,6 +85,9 @@ class InvestigationService:
 
         # 2. Run applicable detectors
         raw_artifacts = self.registry.run_detectors(context)
+        detector_runs = list(getattr(self.registry, "last_runs", []))
+        detector_errors = list(getattr(self.registry, "last_errors", []))
+        coverage_status = "partial" if detector_errors else "complete"
 
         # 3. Correlate and deduplicate artifacts
         correlated_artifacts = ArtifactCorrelator.correlate(raw_artifacts)
@@ -116,4 +125,7 @@ class InvestigationService:
             by_domain=by_domain,
             by_action=by_action,
             by_category=by_category,
+            detector_runs=detector_runs,
+            detector_errors=detector_errors,
+            coverage_status=coverage_status,
         )
