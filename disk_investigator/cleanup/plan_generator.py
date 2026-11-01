@@ -380,6 +380,21 @@ class PlanGenerator:
                 if c.user_data_probability != UserDataProbability.LOW:
                     continue
             else:
+                raw_rec = c.get("recommended_action")
+                if raw_rec is None:
+                    continue
+                rec_action_str = raw_rec.value if hasattr(raw_rec, "value") else str(raw_rec)
+                allowed_rec_strs = {r.value for r in EXECUTABLE_RECOMMENDATIONS}
+                if rec_action_str not in allowed_rec_strs:
+                    continue
+
+                raw_prob = c.get("user_data_probability")
+                if raw_prob is None:
+                    continue
+                prob_val = raw_prob.value if hasattr(raw_prob, "value") else str(raw_prob)
+                if prob_val != UserDataProbability.LOW.value:
+                    continue
+
                 p = canonicalize_path(c.get("path", ""))
                 a_type = c.get("artifact_type")
                 sz = c.get("logical_bytes", 0)
@@ -390,14 +405,6 @@ class PlanGenerator:
                 dom = c.get("domain")
                 cat = c.get("category")
                 cap_id = c.get("capability_id")
-                raw_rec = c.get("recommended_action")
-                if raw_rec is not None:
-                    rec_action_str = raw_rec.value if hasattr(raw_rec, "value") else str(raw_rec)
-                    allowed_rec_strs = {r.value for r in EXECUTABLE_RECOMMENDATIONS}
-                    if rec_action_str not in allowed_rec_strs:
-                        continue
-                else:
-                    rec_action_str = RecommendedAction.RECYCLE_KNOWN_CACHE.value
 
             # Classify item
             classification = self.classifier.classify(

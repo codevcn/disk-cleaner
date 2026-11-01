@@ -8,6 +8,7 @@ import unittest
 from unittest.mock import patch
 from disk_investigator.cleanup import PlanGenerator, SafeExecutor, ActionType
 from disk_investigator.classifiers import RiskLevel, Disposition
+from disk_investigator.models import RecommendedAction, UserDataProbability
 from disk_investigator.path_policy import canonicalize_path
 
 
@@ -36,6 +37,8 @@ class TestCleanup(unittest.TestCase):
                 "artifact_type": "package_cache",
                 "owner_app": "npm",
                 "logical_bytes": 1024,
+                "recommended_action": RecommendedAction.TYPED_CLEANUP,
+                "user_data_probability": UserDataProbability.LOW,
             }
         ]
 
@@ -64,6 +67,8 @@ class TestCleanup(unittest.TestCase):
                 "artifact_type": "package_cache",
                 "owner_app": "npm",
                 "logical_bytes": 1024,
+                "recommended_action": RecommendedAction.TYPED_CLEANUP,
+                "user_data_probability": UserDataProbability.LOW,
             }
         ]
         

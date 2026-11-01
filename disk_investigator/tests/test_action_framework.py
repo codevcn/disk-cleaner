@@ -51,7 +51,13 @@ class TestActionFramework(unittest.TestCase):
         planner = PlanGenerator(cache_dir=self.plans_dir)
         plan = planner.generate_plan(
             target_root=self.base,
-            candidates=[{"path": target_file, "artifact_type": "temporary", "logical_bytes": 7}],
+            candidates=[{
+                "path": target_file,
+                "artifact_type": "temporary",
+                "logical_bytes": 7,
+                "recommended_action": RecommendedAction.RECYCLE_KNOWN_CACHE,
+                "user_data_probability": UserDataProbability.LOW,
+            }],
         )
         self.assertEqual(plan.schema_version, 2)
 
@@ -77,8 +83,20 @@ class TestActionFramework(unittest.TestCase):
         planner = PlanGenerator(cache_dir=self.plans_dir)
         # Offer both parent and child as cleanup candidates
         candidates = [
-            {"path": parent_dir, "artifact_type": "temporary", "logical_bytes": 100},
-            {"path": child_dir, "artifact_type": "temporary", "logical_bytes": 40},
+            {
+                "path": parent_dir,
+                "artifact_type": "temporary",
+                "logical_bytes": 100,
+                "recommended_action": RecommendedAction.RECYCLE_KNOWN_CACHE,
+                "user_data_probability": UserDataProbability.LOW,
+            },
+            {
+                "path": child_dir,
+                "artifact_type": "temporary",
+                "logical_bytes": 40,
+                "recommended_action": RecommendedAction.RECYCLE_KNOWN_CACHE,
+                "user_data_probability": UserDataProbability.LOW,
+            },
         ]
         plan = planner.generate_plan(target_root=self.base, candidates=candidates)
 
@@ -94,7 +112,13 @@ class TestActionFramework(unittest.TestCase):
 
         planner = PlanGenerator(cache_dir=self.plans_dir)
         candidates = [
-            {"path": browser_cache, "artifact_type": "browser_cache", "logical_bytes": 10},
+            {
+                "path": browser_cache,
+                "artifact_type": "browser_cache",
+                "logical_bytes": 10,
+                "recommended_action": RecommendedAction.RECYCLE_KNOWN_CACHE,
+                "user_data_probability": UserDataProbability.LOW,
+            },
         ]
         plan = planner.generate_plan(target_root=self.base, candidates=candidates)
         self.assertEqual(plan.items[0].action_type, ActionType.BROWSER_CACHE_PURGE)
@@ -106,8 +130,12 @@ class TestActionFramework(unittest.TestCase):
         with patch("disk_investigator.cleanup.action_registry.check_process_state", return_value=ProcessState.RUNNING):
             res = executor.execute(plan=plan, item_ids=[1], dry_run=False)
             self.assertEqual(res.succeeded_count, 0)
-            self.assertEqual(res.failed_count, 1)
-            self.assertIn("is running", res.failed_items[0]["error"])
+            self.assertEqual(res.skipped_count, 1)
+            self.assertEqual(res.failed_count, 0)
+            self.assertEqual(res.immediate_reclaimed_bytes, 0)
+            self.assertEqual(res.recycle_bin_bytes, 0)
+            self.assertEqual(res.skipped_items[0]["status"], "APP_RUNNING_SKIP")
+            self.assertIn("is running", res.skipped_items[0]["reason"])
             # Cache files must remain untouched
             self.assertTrue(os.path.exists(browser_cache))
 
@@ -168,7 +196,13 @@ class TestActionFramework(unittest.TestCase):
         planner = PlanGenerator(cache_dir=self.plans_dir)
         plan = planner.generate_plan(
             target_root=self.base,
-            candidates=[{"path": target_file, "artifact_type": "temporary", "logical_bytes": 7}],
+            candidates=[{
+                "path": target_file,
+                "artifact_type": "temporary",
+                "logical_bytes": 7,
+                "recommended_action": RecommendedAction.RECYCLE_KNOWN_CACHE,
+                "user_data_probability": UserDataProbability.LOW,
+            }],
         )
 
         # Adversarially tamper with action_binding without recomputing HMAC
@@ -179,6 +213,78 @@ class TestActionFramework(unittest.TestCase):
             executor.execute(plan=plan, item_ids=[1], dry_run=False)
 
         self.assertIn("Plan hash mismatch", str(ctx.exception))
+
+    def test_missing_recommended_action_dict_is_excluded(self):
+        """Item 1: Dict candidate missing recommended_action is rejected fail-closed."""
+        target_file = os.path.join(self.base, "dict_no_rec.tmp")
+        with open(target_file, "w") as f:
+            f.write("data")
+
+        planner = PlanGenerator(cache_dir=self.plans_dir)
+        plan = planner.generate_plan(
+            target_root=self.base,
+            candidates=[{
+                "path": target_file,
+                "artifact_type": "temporary",
+                "logical_bytes": 4,
+                "user_data_probability": UserDataProbability.LOW,
+                # recommended_action missing!
+            }],
+        )
+        self.assertEqual(plan.total_items, 0)
+        self.assertEqual(len(plan.items), 0)
+
+    def test_dict_without_low_user_probability_is_excluded(self):
+        """Item 1: Dict candidate with user_data_probability != LOW is rejected fail-closed."""
+        target_file = os.path.join(self.base, "dict_high_prob.tmp")
+        with open(target_file, "w") as f:
+            f.write("data")
+
+        planner = PlanGenerator(cache_dir=self.plans_dir)
+        plan = planner.generate_plan(
+            target_root=self.base,
+            candidates=[{
+                "path": target_file,
+                "artifact_type": "temporary",
+                "logical_bytes": 4,
+                "recommended_action": RecommendedAction.RECYCLE_KNOWN_CACHE,
+                "user_data_probability": "HIGH",
+            }],
+        )
+        self.assertEqual(plan.total_items, 0)
+        self.assertEqual(len(plan.items), 0)
+
+    def test_app_state_unknown_skip_safeguard(self):
+        """Item 2: Fail-closed process state UNKNOWN records skipped_items and preserves files."""
+        browser_cache = os.path.join(self.base, "Chrome_Cache")
+        os.makedirs(browser_cache)
+        with open(os.path.join(browser_cache, "data"), "w") as f:
+            f.write("cache data")
+
+        planner = PlanGenerator(cache_dir=self.plans_dir)
+        candidates = [
+            {
+                "path": browser_cache,
+                "artifact_type": "browser_cache",
+                "logical_bytes": 10,
+                "recommended_action": RecommendedAction.RECYCLE_KNOWN_CACHE,
+                "user_data_probability": UserDataProbability.LOW,
+            },
+        ]
+        plan = planner.generate_plan(target_root=self.base, candidates=candidates)
+
+        executor = SafeExecutor()
+        from disk_investigator.cleanup.action_registry import ProcessState
+        with patch("disk_investigator.cleanup.action_registry.check_process_state", return_value=ProcessState.UNKNOWN):
+            res = executor.execute(plan=plan, item_ids=[1], dry_run=False)
+            self.assertEqual(res.succeeded_count, 0)
+            self.assertEqual(res.skipped_count, 1)
+            self.assertEqual(res.failed_count, 0)
+            self.assertEqual(res.immediate_reclaimed_bytes, 0)
+            self.assertEqual(res.recycle_bin_bytes, 0)
+            self.assertEqual(res.skipped_items[0]["status"], "APP_STATE_UNKNOWN_SKIP")
+            self.assertIn("Unable to verify process state", res.skipped_items[0]["reason"])
+            self.assertTrue(os.path.exists(browser_cache))
 
     def test_plan_generator_strict_allowlist_excludes_keep_and_uninstall(self):
         """V22-FINAL-01 & V22-FINAL-02: Ensure KEEP and UNINSTALL_VIA_APP are strictly impossible in plan."""

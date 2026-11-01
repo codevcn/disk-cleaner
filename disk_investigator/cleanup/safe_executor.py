@@ -394,12 +394,15 @@ class SafeExecutor:
             # Actual execution via ActionRegistry
             try:
                 action_res = self.action_registry.execute_action(item, dry_run=False)
-                if action_res.get("status") == "APP_RUNNING_SKIP":
-                    result.failed_items.append({
+                skip_statuses = {"APP_RUNNING_SKIP", "APP_STATE_UNKNOWN_SKIP"}
+                if action_res.get("status") in skip_statuses:
+                    result.skipped_items.append({
                         "item_id": item_id,
                         "path": item.path,
-                        "error": action_res.get("error", "Application is actively running. Skipped for safety."),
+                        "reason": action_res.get("error", "Skipped for safety."),
+                        "status": action_res.get("status"),
                     })
+                    continue
                 elif action_res.get("recycle_bin"):
                     result.succeeded_items.append(item_id)
                     result.recycle_bin_bytes += item.recycle_bin_bytes

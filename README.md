@@ -3,7 +3,7 @@
 [![Python 3.12](https://img.shields.io/badge/python-3.12-blue.svg)](https://www.python.org/downloads/)
 [![Platform](https://img.shields.io/badge/platform-Windows%2011-0078D6.svg)](https://www.microsoft.com/windows/)
 [![Architecture](https://img.shields.io/badge/safety-HMAC--SHA256%20%7C%20RecycleBin%20%7C%20Fail--Closed-success.svg)](#safety-invariants--threat-model)
-[![Tests](https://img.shields.io/badge/tests-114%2F114%20passed%20(100%25)-brightgreen.svg)](#testing--verification)
+[![Tests](https://img.shields.io/badge/tests-123%2F123%20passed%20(100%25)-brightgreen.svg)](#testing--verification)
 [![Standalone](https://img.shields.io/badge/executable-single--file%20exe-orange.svg)](#standalone-executable-packaging)
 
 An autonomous filesystem investigation and safe storage cleanup harness designed specifically for **Google Antigravity** AI agents and power users on **Windows 11**.
@@ -134,7 +134,7 @@ Disk Investigator provides three tailored distribution methods:
 | :--- | :--- | :--- | :--- |
 | **1-Click All-in-One Installer (Canonical)** | `disk-investigator-setup.exe` | **End-users & AI Agents** | **Zero dependencies, single file**. Installs binary to `%LOCALAPPDATA%\DiskInvestigator\bin`, configures User `PATH` safely via Registry (`winreg`), installs Antigravity Skill (`SKILL.md`), and provides `uninstall.cmd`. |
 | **Standalone Portable EXE** | `.\disk_investigator.exe <command>` | **Advanced CLI Users** | Portable single binary. Zero runtime dependencies. Perfect for portable USB drives or air-gapped systems. |
-| **Python Developer Package** | `python -m disk_investigator <command>` | **Developers & CI/CD** | Full source code with 115+ automated unit and destructive tests. |
+| **Python Developer Package** | `python -m disk_investigator <command>` | **Developers & CI/CD** | Full source code with 120+ automated unit and destructive tests. |
 
 ---
 
@@ -251,7 +251,7 @@ When an update is detected, the user simply asks the AI Agent:
 
 The Agent executes `python update_from_github.py` (or `update.cmd`), which autonomously executes the full lifecycle:
 1. **GitHub Pull**: Fetches and pulls latest commits from `origin/main`.
-2. **Automated Verification**: Runs all 48 tests (`python -m unittest discover -s disk_investigator/tests`) to ensure 100% test integrity.
+2. **Automated Verification**: Runs full test suite (120+ tests: `python -m unittest discover -s disk_investigator/tests`) to ensure 100% test integrity.
 3. **Executable Recompilation**: Invokes `build_exe.py` to regenerate the standalone binary `disk_investigator.exe` in the root folder, incrementing `build_history.json`.
 4. **Antigravity Skill Sync**: Synchronizes the updated `SKILL.md` to `~/.gemini/config/skills/disk-cleanup/SKILL.md`.
 5. **Cache Refresh**: Invalidates update check cache.
@@ -273,21 +273,21 @@ update.cmd
 When you finish implementing a new feature or bugfix, publish a new release to GitHub with 1 command:
 
 ```cmd
-# Publish patch update (e.g. v2.0.3 -> v2.0.4)
+# Publish patch update (e.g. v2.2.0 -> v2.2.1)
 publish.cmd --bump-patch "fix: improve path resolution"
 
-# Publish minor update (e.g. v2.0.3 -> v2.1.0)
+# Publish minor update (e.g. v2.2.0 -> v2.3.0)
 publish.cmd --bump-minor "feat: add specialized cache cleaner"
 
 # Publish specific version
-publish.cmd --version 2.0.5 "release v2.0.5"
+publish.cmd --version 2.2.1 "release v2.2.1"
 
 # Dry-run simulation (without committing or pushing)
 publish.cmd --bump-patch --dry-run "test release pipeline"
 ```
 
 `publish.cmd` executes the complete publishing pipeline:
-1. **Automated Quality Gate**: Runs all 48 tests (`python -m unittest discover -s disk_investigator/tests`). Aborts immediately if any test fails to guarantee production stability.
+1. **Automated Quality Gate**: Runs all automated tests (120+ tests: `python -m unittest discover -s disk_investigator/tests`). Aborts immediately if any test fails to guarantee production stability.
 2. **Binary Packaging**: Calls `build_exe.py` to compile `disk_investigator.exe` and update `build_history.json`.
 3. **Git Commit & Push**: Stages all modified files, commits with release title, and pushes to `origin/main`.
 4. **GitHub Release & Asset Upload**: Creates tag `vX.Y.Z` and uploads `disk_investigator.exe` to GitHub Releases via `gh release create`.
@@ -534,7 +534,7 @@ User: "Ổ D của tôi sắp đầy, hãy điều tra giúp tôi."
 
 ## Testing & Verification
 
-The test suite includes **115+ comprehensive unit, integration, and false-positive boundary tests** covering all 8 storage domains, capability discovery, TOCTOU drift detection, HMAC plan integrity, 8.3 alias defense, Recycle Bin operations, and typed action registry:
+The test suite includes **120+ comprehensive unit, integration, and false-positive boundary tests** covering all 8 storage domains, capability discovery, TOCTOU drift detection, HMAC plan integrity, 8.3 alias defense, Recycle Bin operations, and typed action registry:
 
 ```bash
 # Run full test suite using Python test runner
@@ -551,7 +551,7 @@ python -m unittest discover -s disk_investigator/tests -v
 - **`TestDetectors`**: Tests `DeveloperDetector` (stale `node_modules`, `.venv`), `DockerDetector`, and `LargeFilesDetector`.
 - **`TestPathPolicy`**: Tests NT canonicalization, critical boundary evaluation, and network share detection.
 - **`TestServices`**: Tests `ScanService` and `DrilldownService` snapshot lifecycle.
-- **`TestDestructiveE2E`**: 15 rigorous safety tests:
+- **`TestDestructiveE2E`**: 20 rigorous safety tests:
   - Recycle Bin sibling preservation
   - TOCTOU size drift and mtime drift refusal
   - Directory junction swap refusal (direct and parent junctions)
@@ -576,7 +576,7 @@ d:\D-Personal\disk-cleaner\
 ├── PROJECT_STATE.md          # Current project state & audit log
 │
 ├── disk_investigator/        # Core Python package
-│   ├── __init__.py           # Package version definition (v2.0.3)
+│   ├── __init__.py           # Package version definition (v2.2.0)
 │   ├── __main__.py           # Application entry point
 │   ├── cli.py                # Command-line interface & argument parser
 │   ├── capabilities.py       # Host environment & tool capability discovery
@@ -584,10 +584,10 @@ d:\D-Personal\disk-cleaner\
 │   ├── path_policy.py        # Path canonicalization & safety boundaries
 │   ├── backends/             # Dust & Native Windows scanners
 │   ├── classifiers/          # Semantic classifiers & risk evaluation
-│   ├── detectors/            # Specialized detectors (Dev, Docker, Large)
+│   ├── detectors/            # Multi-domain storage detectors (Browser, Office, Creator, etc.)
 │   ├── cleanup/              # Signed plan generator & safe executor
 │   ├── services/             # Scan & drill-down snapshot services
-│   └── tests/                # 44 unit & destructive E2E tests
+│   └── tests/                # 120+ unit, integration & destructive E2E tests
 │
 └── skills/
     └── disk-cleanup/         # Antigravity AI Agent Skill definition

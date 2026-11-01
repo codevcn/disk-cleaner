@@ -5,7 +5,7 @@ for disk_investigator (https://github.com/codevcn/disk-cleaner).
 
 Automates the complete release lifecycle:
 1. Version management (bump patch/minor or specify custom version).
-2. Quality Gate: runs the full unit test suite (48 tests).
+2. Quality Gate: runs the full unit test suite (120+ tests).
 3. Compiles the standalone root executable (disk_investigator.exe) via build_exe.py.
 4. Updates build_history.json.
 5. Commits and pushes changes to GitHub origin/main.

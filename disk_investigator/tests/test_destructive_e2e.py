@@ -22,6 +22,7 @@ from disk_investigator.cleanup import (
     PlanItem,
     SafeExecutor,
 )
+from disk_investigator.models import RecommendedAction, UserDataProbability
 
 
 class TestDestructiveE2E(unittest.TestCase):
@@ -53,6 +54,8 @@ class TestDestructiveE2E(unittest.TestCase):
                 "path": target_file,
                 "artifact_type": "temporary",
                 "logical_bytes": os.path.getsize(target_file),
+                "recommended_action": RecommendedAction.RECYCLE_KNOWN_CACHE,
+                "user_data_probability": UserDataProbability.LOW,
             }
         ]
         plan = planner.generate_plan(target_root=self.base, candidates=candidates)
@@ -85,7 +88,13 @@ class TestDestructiveE2E(unittest.TestCase):
         planner = PlanGenerator(cache_dir=os.path.join(self.base, "plans"))
         plan = planner.generate_plan(
             target_root=self.base,
-            candidates=[{"path": target_file, "artifact_type": "temporary", "logical_bytes": 16}],
+            candidates=[{
+                "path": target_file,
+                "artifact_type": "temporary",
+                "logical_bytes": 16,
+                "recommended_action": RecommendedAction.RECYCLE_KNOWN_CACHE,
+                "user_data_probability": UserDataProbability.LOW,
+            }],
         )
 
         # Simulate external process altering file 10 seconds later
@@ -117,7 +126,13 @@ class TestDestructiveE2E(unittest.TestCase):
         planner = PlanGenerator(cache_dir=os.path.join(self.base, "plans"))
         plan = planner.generate_plan(
             target_root=self.base,
-            candidates=[{"path": victim_dir, "artifact_type": "temporary", "logical_bytes": 0}],
+            candidates=[{
+                "path": victim_dir,
+                "artifact_type": "temporary",
+                "logical_bytes": 0,
+                "recommended_action": RecommendedAction.RECYCLE_KNOWN_CACHE,
+                "user_data_probability": UserDataProbability.LOW,
+            }],
         )
 
         # Attacker swaps directory for a junction pointing to sensitive data
@@ -150,7 +165,13 @@ class TestDestructiveE2E(unittest.TestCase):
         planner = PlanGenerator(cache_dir=os.path.join(self.base, "plans"))
         plan = planner.generate_plan(
             target_root=self.base,
-            candidates=[{"path": target_file, "artifact_type": "temporary", "logical_bytes": 17}],
+            candidates=[{
+                "path": target_file,
+                "artifact_type": "temporary",
+                "logical_bytes": 17,
+                "recommended_action": RecommendedAction.RECYCLE_KNOWN_CACHE,
+                "user_data_probability": UserDataProbability.LOW,
+            }],
         )
 
         # Append more bytes so size changes
@@ -174,7 +195,13 @@ class TestDestructiveE2E(unittest.TestCase):
         planner = PlanGenerator(cache_dir=os.path.join(self.base, "plans"))
         plan = planner.generate_plan(
             target_root=self.base,
-            candidates=[{"path": target_file, "artifact_type": "temporary", "logical_bytes": 4}],
+            candidates=[{
+                "path": target_file,
+                "artifact_type": "temporary",
+                "logical_bytes": 4,
+                "recommended_action": RecommendedAction.RECYCLE_KNOWN_CACHE,
+                "user_data_probability": UserDataProbability.LOW,
+            }],
         )
         self.assertTrue(len(plan.plan_hash) > 0)
 
@@ -263,7 +290,13 @@ class TestDestructiveE2E(unittest.TestCase):
         planner = PlanGenerator(cache_dir=os.path.join(self.base, "plans"))
         plan = planner.generate_plan(
             target_root=self.base,
-            candidates=[{"path": target_file, "artifact_type": "temporary", "logical_bytes": 9}],
+            candidates=[{
+                "path": target_file,
+                "artifact_type": "temporary",
+                "logical_bytes": 9,
+                "recommended_action": RecommendedAction.RECYCLE_KNOWN_CACHE,
+                "user_data_probability": UserDataProbability.LOW,
+            }],
         )
 
         executor = SafeExecutor()
@@ -289,7 +322,13 @@ class TestDestructiveE2E(unittest.TestCase):
         planner = PlanGenerator(cache_dir=os.path.join(self.base, "plans"))
         plan = planner.generate_plan(
             target_root=self.base,
-            candidates=[{"path": victim_file, "artifact_type": "temporary", "logical_bytes": 11}],
+            candidates=[{
+                "path": victim_file,
+                "artifact_type": "temporary",
+                "logical_bytes": 11,
+                "recommended_action": RecommendedAction.RECYCLE_KNOWN_CACHE,
+                "user_data_probability": UserDataProbability.LOW,
+            }],
         )
 
         # Attacker removes parent_dir and replaces parent_dir with a junction pointing elsewhere
@@ -320,7 +359,13 @@ class TestDestructiveE2E(unittest.TestCase):
         planner = PlanGenerator(cache_dir=os.path.join(self.base, "plans"))
         plan = planner.generate_plan(
             target_root=self.base,
-            candidates=[{"path": target_file, "artifact_type": "temporary", "logical_bytes": 14}],
+            candidates=[{
+                "path": target_file,
+                "artifact_type": "temporary",
+                "logical_bytes": 14,
+                "recommended_action": RecommendedAction.RECYCLE_KNOWN_CACHE,
+                "user_data_probability": UserDataProbability.LOW,
+            }],
         )
 
         executor = SafeExecutor()
@@ -407,7 +452,13 @@ class TestDestructiveE2E(unittest.TestCase):
         planner = PlanGenerator(cache_dir=custom_cache)
         plan = planner.generate_plan(
             target_root=self.base,
-            candidates=[{"path": target_file, "artifact_type": "temporary", "logical_bytes": 14}],
+            candidates=[{
+                "path": target_file,
+                "artifact_type": "temporary",
+                "logical_bytes": 14,
+                "recommended_action": RecommendedAction.RECYCLE_KNOWN_CACHE,
+                "user_data_probability": UserDataProbability.LOW,
+            }],
         )
 
         executor = SafeExecutor(cache_dir=custom_cache)
@@ -426,7 +477,13 @@ class TestDestructiveE2E(unittest.TestCase):
         planner = PlanGenerator(cache_dir=custom_cache)
         plan = planner.generate_plan(
             target_root=self.base,
-            candidates=[{"path": target_file, "artifact_type": "temporary", "logical_bytes": 11}],
+            candidates=[{
+                "path": target_file,
+                "artifact_type": "temporary",
+                "logical_bytes": 11,
+                "recommended_action": RecommendedAction.RECYCLE_KNOWN_CACHE,
+                "user_data_probability": UserDataProbability.LOW,
+            }],
         )
 
         executor = SafeExecutor(cache_dir=custom_cache)
@@ -590,7 +647,13 @@ class TestDestructiveE2E(unittest.TestCase):
         with patch("os.path.getmtime", side_effect=PermissionError("Access denied to metadata")):
             plan = planner.generate_plan(
                 target_root=self.base,
-                candidates=[{"path": target_file, "artifact_type": "temporary", "logical_bytes": 4}],
+                candidates=[{
+                "path": target_file,
+                "artifact_type": "temporary",
+                "logical_bytes": 4,
+                "recommended_action": RecommendedAction.RECYCLE_KNOWN_CACHE,
+                "user_data_probability": UserDataProbability.LOW,
+            }],
             )
             self.assertEqual(plan.total_items, 0)
             self.assertEqual(len(plan.items), 0)
@@ -604,7 +667,13 @@ class TestDestructiveE2E(unittest.TestCase):
         planner = PlanGenerator(cache_dir=os.path.join(self.base, "plans"))
         plan = planner.generate_plan(
             target_root=self.base,
-            candidates=[{"path": target_file, "artifact_type": "temporary", "logical_bytes": 4}],
+            candidates=[{
+                "path": target_file,
+                "artifact_type": "temporary",
+                "logical_bytes": 4,
+                "recommended_action": RecommendedAction.RECYCLE_KNOWN_CACHE,
+                "user_data_probability": UserDataProbability.LOW,
+            }],
         )
 
         executor = SafeExecutor(cache_dir=os.path.join(self.base, "plans"))
