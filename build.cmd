@@ -59,18 +59,18 @@ if %ERRORLEVEL% neq 0 (
 echo.
 
 :: 3. Execute build_exe.py with all passed arguments
-echo [*] [1/2] Compiling disk_investigator.exe...
+echo [*] [1/3] Compiling disk_investigator.exe...
 %PYTHON_BIN% "%~dp0build_exe.py" %*
 set "BUILD_EXIT_CODE=%ERRORLEVEL%"
 
 if %BUILD_EXIT_CODE% neq 0 (
     echo.
-    echo [ERROR] Packaging failed with exit code %BUILD_EXIT_CODE%.
+    echo [ERROR] Packaging failed for disk_investigator.exe with exit code %BUILD_EXIT_CODE%.
     exit /b %BUILD_EXIT_CODE%
 )
 
 echo.
-echo [*] [2/2] Packaging disk-investigator-setup.exe...
+echo [*] [2/3] Packaging disk-investigator-setup.exe...
 %PYTHON_BIN% "%~dp0build_installer.py"
 set "SETUP_EXIT_CODE=%ERRORLEVEL%"
 
@@ -81,7 +81,19 @@ if %SETUP_EXIT_CODE% neq 0 (
 )
 
 echo.
-echo [SUCCESS] Both standalone binary and 1-Click Setup EXE are ready in project root:
+echo [*] [3/3] Packaging disk-investigator-uninstall.exe...
+%PYTHON_BIN% "%~dp0build_uninstaller.py"
+set "UNINST_EXIT_CODE=%ERRORLEVEL%"
+
+if %UNINST_EXIT_CODE% neq 0 (
+    echo.
+    echo [ERROR] Uninstaller packaging failed with exit code %UNINST_EXIT_CODE%.
+    exit /b %UNINST_EXIT_CODE%
+)
+
+echo.
+echo [SUCCESS] Standalone CLI, 1-Click Setup EXE, and Uninstaller EXE are ready in project root:
 echo   - disk_investigator.exe
 echo   - disk-investigator-setup.exe
+echo   - disk-investigator-uninstall.exe
 exit /b 0

@@ -41,292 +41,91 @@ if sys.platform == "win32":
     except Exception:
         pass
 
-APP_NAME = "DiskInvestigator"
-APP_DISPLAY_NAME = "Disk Investigator (AI-Native Storage Cleaner)"
-SKILL_FOLDER_NAME = "disk-cleanup"
-GITHUB_REPO = "codevcn/disk-cleaner"
+CURRENT_DIR = Path(__file__).resolve().parent
+if str(CURRENT_DIR) not in sys.path:
+    sys.path.insert(0, str(CURRENT_DIR))
 
-
-def get_installer_version() -> str:
-    """
-    Retrieves authoritative version from embedded build_info.json or __init__.py.
-    Provides Single Source of Truth across CLI, installer, and manifests.
-    """
-    # 1. Check embedded build_info.json (PyInstaller bundled mode)
-    build_info_path = get_resource_path("build_info.json")
-    if build_info_path and build_info_path.exists():
-        try:
-            with open(build_info_path, "r", encoding="utf-8") as f:
-                data = json.load(f)
-                if data.get("version"):
-                    return str(data["version"]).strip()
-        except Exception:
-            pass
-
-    # 2. Check disk_investigator/__init__.py in development workspace
-    dev_root = Path(__file__).resolve().parent
-    init_file = dev_root / "disk_investigator" / "__init__.py"
-    if init_file.exists():
-        try:
-            with open(init_file, "r", encoding="utf-8") as f:
-                for line in f:
-                    if line.startswith("__version__"):
-                        return line.split("=")[1].strip().strip('"').strip("'")
-        except Exception:
-            pass
-
-    return "unknown"
-
-
-def compute_sha256(filepath: Path) -> str:
-    """Computes SHA-256 hash of a file."""
-    sha = hashlib.sha256()
-    with open(filepath, "rb") as f:
-        while chunk := f.read(65536):
-            sha.update(chunk)
-    return sha.hexdigest()
-
-
-def get_resource_path(relative_name: str) -> Path:
-    """
-    Returns absolute path to embedded resource (works both in PyInstaller bundled mode
-    and standard development script mode).
-    """
-    if hasattr(sys, "_MEIPASS"):
-        # PyInstaller creates a temp folder and stores path in _MEIPASS
-        base_path = Path(sys._MEIPASS)  # type: ignore
-        candidate = base_path / relative_name
-        if candidate.exists():
-            return candidate
-
-    # Development or local folder mode
-    dev_root = Path(__file__).resolve().parent
-    local_candidate = dev_root / relative_name
-    if local_candidate.exists():
-        return local_candidate
-
-    # Check common relative locations
-    if relative_name == "disk_investigator.exe":
-        c = dev_root / "disk_investigator.exe"
-        if c.exists():
-            return c
-    elif relative_name == "SKILL.md":
-        c = dev_root / "skills" / SKILL_FOLDER_NAME / "SKILL.md"
-        if c.exists():
-            return c
-    elif relative_name == "README.md":
-        c = dev_root / "README.md"
-        if c.exists():
-            return c
-
-    return dev_root / relative_name
-
-
-def get_target_directories() -> Tuple[Path, Path, Path, Path]:
-    """
-    Returns canonical target installation directories:
-    1. install_dir: %LOCALAPPDATA%\\DiskInvestigator
-    2. bin_dir: %LOCALAPPDATA%\\DiskInvestigator\\bin
-    3. skill_dir: %USERPROFILE%\\.gemini\\config\\skills\\disk-cleanup
-    4. skill_ref_dir: %USERPROFILE%\\.gemini\\config\\skills\\disk-cleanup\\references
-    """
-    local_app_data = os.environ.get("LOCALAPPDATA")
-    if not local_app_data:
-        local_app_data = str(Path.home() / "AppData" / "Local")
-
-    user_profile = os.environ.get("USERPROFILE")
-    if not user_profile:
-        user_profile = str(Path.home())
-
-    install_dir = Path(local_app_data) / APP_NAME
-    bin_dir = install_dir / "bin"
-    skill_dir = Path(user_profile) / ".gemini" / "config" / "skills" / SKILL_FOLDER_NAME
-    skill_ref_dir = skill_dir / "references"
-
-    return install_dir, bin_dir, skill_dir, skill_ref_dir
+from disk_investigator.lifecycle import (
+    APP_NAME,
+    APP_DISPLAY_NAME,
+    GITHUB_REPO,
+    RELEASE_ASSETS,
+    SKILL_FOLDER_NAME,
+    KNOWN_OWNED_FILES,
+    KNOWN_OWNED_SUBDIRS,
+    ProcessState,
+    UninstallEngine,
+    UninstallResult,
+    UninstallStatus,
+    check_process_state,
+    compute_sha256,
+    get_app_version,
+    get_resource_path,
+    get_target_directories,
+    load_manifest,
+    write_manifest,
+)
+import disk_investigator.lifecycle.common as common_lifecycle
 
 
 def broadcast_environment_change() -> None:
-    """
-    Broadcasts WM_SETTINGCHANGE message to notify all running top-level windows
-    that system/user environment variables have been updated.
-    """
-    if sys.platform != "win32":
-        return
-
-    HWND_BROADCAST = 0xFFFF
-    WM_SETTINGCHANGE = 0x001A
-    SMTO_ABORTIFHUNG = 0x0002
-
-    try:
-        send_message_timeout = ctypes.windll.user32.SendMessageTimeoutW
-        result = wintypes.DWORD()
-        send_message_timeout(
-            HWND_BROADCAST,
-            WM_SETTINGCHANGE,
-            0,
-            "Environment",
-            SMTO_ABORTIFHUNG,
-            2000,
-            ctypes.byref(result),
-        )
-    except Exception as e:
-        print(f"[!] Cảnh báo: Không thể phát thông báo WM_SETTINGCHANGE: {e}")
+    """Broadcasts WM_SETTINGCHANGE message."""
+    common_lifecycle.broadcast_environment_change()
 
 
 def add_bin_to_user_path(bin_dir: Path) -> Tuple[bool, bool]:
-    """
-    Safely adds bin_dir to HKCU\\Environment\\Path using winreg.
-    Preserves all existing variables and REG_EXPAND_SZ typing.
-    Never uses 'setx' to prevent length truncation bugs.
-    Returns:
-        (success: bool, changed: bool)
-        'changed' is True ONLY if bin_dir was newly added in this operation.
-    """
-    if sys.platform != "win32":
-        return False, False
-
-    import winreg
-
-    bin_str = str(bin_dir.resolve())
-    bin_norm = bin_str.lower().rstrip("\\")
-
-    try:
-        with winreg.OpenKey(
-            winreg.HKEY_CURRENT_USER, r"Environment", 0, winreg.KEY_READ | winreg.KEY_WRITE
-        ) as key:
-            try:
-                current_path_val, val_type = winreg.QueryValueEx(key, "Path")
-            except FileNotFoundError:
-                current_path_val = ""
-                val_type = winreg.REG_EXPAND_SZ
-
-            # Split existing paths
-            entries = [p.strip() for p in current_path_val.split(";") if p.strip()]
-
-            # Check if already present (case-insensitive)
-            for entry in entries:
-                if entry.lower().rstrip("\\") == bin_norm:
-                    print(f"[*] Thư mục bin đã tồn tại trong User PATH: {bin_dir}")
-                    return True, False
-
-            # Append new entry
-            entries.append(bin_str)
-            new_path_val = ";".join(entries)
-
-            winreg.SetValueEx(key, "Path", 0, winreg.REG_EXPAND_SZ, new_path_val)
-            print(f"[+] Đã thêm vào User PATH: {bin_dir}")
-
-        broadcast_environment_change()
-        return True, True
-    except Exception as e:
-        print(f"[ERROR] Thất bại khi ghi Registry User PATH: {e}")
-        return False, False
+    """Safely adds bin_dir to HKCU\\Environment\\Path using winreg."""
+    return common_lifecycle.add_bin_to_user_path(
+        bin_dir, broadcast_fn=broadcast_environment_change
+    )
 
 
 def remove_bin_from_user_path(bin_dir: Path) -> bool:
-    """
-    Safely removes bin_dir from HKCU\\Environment\\Path using winreg.
-    """
-    if sys.platform != "win32":
-        return False
-
-    import winreg
-
-    bin_norm = str(bin_dir.resolve()).lower().rstrip("\\")
-
-    try:
-        with winreg.OpenKey(
-            winreg.HKEY_CURRENT_USER, r"Environment", 0, winreg.KEY_READ | winreg.KEY_WRITE
-        ) as key:
-            try:
-                current_path_val, val_type = winreg.QueryValueEx(key, "Path")
-            except FileNotFoundError:
-                return True
-
-            entries = [p.strip() for p in current_path_val.split(";") if p.strip()]
-            new_entries = [p for p in entries if p.lower().rstrip("\\") != bin_norm]
-
-            if len(entries) != len(new_entries):
-                new_path_val = ";".join(new_entries)
-                winreg.SetValueEx(key, "Path", 0, winreg.REG_EXPAND_SZ, new_path_val)
-                print(f"[+] Đã gỡ bỏ khỏi User PATH: {bin_dir}")
-                broadcast_environment_change()
-            else:
-                print(f"[*] Thư mục bin không có trong User PATH.")
-
-        return True
-    except Exception as e:
-        print(f"[ERROR] Thất bại khi cập nhật Registry User PATH: {e}")
-        return False
+    """Safely removes bin_dir from HKCU\\Environment\\Path using winreg."""
+    return common_lifecycle.remove_bin_from_user_path(
+        bin_dir, broadcast_fn=broadcast_environment_change
+    )
 
 
-def load_manifest(install_dir: Path) -> Optional[Dict[str, Any]]:
-    """Loads existing install_manifest.json if present."""
-    manifest_file = install_dir / "install_manifest.json"
-    if manifest_file.exists():
-        try:
-            with open(manifest_file, "r", encoding="utf-8") as f:
-                return json.load(f)
-        except Exception:
-            pass
-    return None
-
-
-def write_manifest(install_dir: Path, manifest_data: Dict[str, Any]) -> None:
-    """Writes install_manifest.json atomically."""
-    manifest_file = install_dir / "install_manifest.json"
-    tmp_file = manifest_file.with_suffix(".tmp")
-    with open(tmp_file, "w", encoding="utf-8") as f:
-        json.dump(manifest_data, f, indent=2, ensure_ascii=False)
-    os.replace(str(tmp_file), str(manifest_file))
-    print(f"[+] Đã lưu bản ghi cấu hình cài đặt: {manifest_file.name}")
+def get_installer_version() -> str:
+    """Returns application version."""
+    return get_app_version()
 
 
 def generate_uninstaller_script(install_dir: Path, bin_dir: Path, skill_path: Path) -> Path:
     """
     Generates a standalone uninstall.cmd script in the install directory.
     Enables one-click uninstallation from Windows Explorer or CMD.
-    Ensures safe cleanup of the lifecycle directory and executable after exit.
+    Never executes raw destructive recursive directory deletes (rd /s /q).
     """
     uninstaller_path = install_dir / "uninstall.cmd"
     lifecycle_dir = install_dir / "lifecycle"
-    lifecycle_setup_exe = lifecycle_dir / "disk-investigator-setup.exe"
 
     batch_content = f"""@echo off
 chcp 65001 >nul
+title {APP_NAME} - Gỡ cài đặt
+
+if exist "%~dp0lifecycle\\disk-investigator-uninstall.exe" (
+    "%~dp0lifecycle\\disk-investigator-uninstall.exe" %*
+    exit /b %ERRORLEVEL%
+)
+
+if exist "%~dp0lifecycle\\disk-investigator-setup.exe" (
+    "%~dp0lifecycle\\disk-investigator-setup.exe" --uninstall %*
+    exit /b %ERRORLEVEL%
+)
+
 echo =======================================================
 echo          GỠ BỎ CÀI ĐẶT {APP_NAME}
 echo =======================================================
-echo Thư mục cài đặt: {install_dir}
+echo [!] Không tìm thấy công cụ gỡ cài đặt nội bộ trong lifecycle/
 echo.
-
-set /p CONFIRM="Bạn có chắc chắn muốn gỡ cài đặt {APP_NAME}? (Y/N): "
-if /i "%CONFIRM%" neq "Y" (
-    echo Đã hủy thao tác.
-    pause
-    exit /b 0
-)
-
-echo.
-echo [*] Đang gỡ bỏ binary và thiết lập môi trường...
-
-if exist "{lifecycle_setup_exe}" (
-    "{lifecycle_setup_exe}" --uninstall --silent
-    set "UNINST_CODE=%ERRORLEVEL%"
-    del /f /q "{lifecycle_setup_exe}" >nul 2>&1
-    rd /q "{lifecycle_dir}" >nul 2>&1
-) else (
-    echo [*] Xóa thư mục cài đặt...
-    rd /s /q "{install_dir}\\bin" >nul 2>&1
-    del /f /q "{install_dir}\\README.md" >nul 2>&1
-    del /f /q "{install_dir}\\install_manifest.json" >nul 2>&1
-    rd /s /q "{lifecycle_dir}" >nul 2>&1
-)
-
-echo.
-echo [+] Hoàn tất gỡ bỏ {APP_NAME}.
+echo Vui lòng tải 'disk-investigator-uninstall.exe' chính thức từ:
+echo https://github.com/{GITHUB_REPO}/releases
+echo để tiến hành gỡ cài đặt sạch sẽ và an toàn.
+echo =======================================================
 pause
+exit /b 1
 """
     with open(uninstaller_path, "w", encoding="utf-8") as f:
         f.write(batch_content)
@@ -587,7 +386,6 @@ def install(
     path_changed = False
     try:
         # Step 3: Copy files via atomic replace
-        # Binary
         tmp_exe = bin_dir / "disk_investigator.exe.tmp"
         shutil.copy2(src_exe, tmp_exe)
         os.replace(str(tmp_exe), str(target_exe))
@@ -601,7 +399,7 @@ def install(
         shutil.copy2(src_readme, target_docs)
         shutil.copy2(src_readme, target_skill_ref_docs)
 
-        # Deploy lifecycle setup binary for self-contained uninstallation/upgrades
+        # Deploy lifecycle binaries for self-contained uninstallation/upgrades
         curr_proc = Path(sys.executable)
         if curr_proc.name.lower() == "disk-investigator-setup.exe" and curr_proc.exists():
             shutil.copy2(curr_proc, lifecycle_exe)
@@ -611,6 +409,10 @@ def install(
             dev_setup = get_resource_path("disk-investigator-setup.exe")
             if dev_setup.exists():
                 shutil.copy2(dev_setup, lifecycle_exe)
+
+        dev_uninstaller = get_resource_path("disk-investigator-uninstall.exe")
+        if dev_uninstaller.exists():
+            shutil.copy2(dev_uninstaller, lifecycle_dir / "disk-investigator-uninstall.exe")
 
         print("[+] Đã cài đặt binary, Skill AI Agent, lifecycle engine và tài liệu kỹ thuật.")
 
@@ -685,108 +487,10 @@ def install(
 def uninstall(silent: bool = False, purge_data: bool = False) -> bool:
     """
     Cleans up the installation, restoring user PATH and removing skill (if unmodified).
-    Preserves user customizations and investigation logs unless --purge-data is specified.
+    Delegates directly to UninstallEngine to ensure unified lifecycle logic.
     """
-    install_dir, bin_dir, skill_dir, skill_ref_dir = get_target_directories()
-    target_exe = bin_dir / "disk_investigator.exe"
-    target_skill = skill_dir / "SKILL.md"
-    target_skill_ref_docs = skill_ref_dir / "README.md"
-    manifest = load_manifest(install_dir)
-
-    print("=======================================================")
-    print(f"       GỠ CÀI ĐẶT {APP_DISPLAY_NAME}")
-    print("=======================================================")
-    print(f"Thư mục cài đặt:   {install_dir}")
-    print(f"Xóa dữ liệu phụ:   {purge_data}")
-    print("=======================================================\n")
-
-    # 1. Remove PATH
-    print("[1/4] Gỡ bỏ thư mục bin khỏi biến môi trường User PATH...")
-    remove_bin_from_user_path(bin_dir)
-
-    # 2. Check skill preservation
-    print("[2/4] Kiểm tra và gỡ bỏ Antigravity Skill...")
-    if target_skill.exists():
-        curr_hash = compute_sha256(target_skill)
-        recorded_hash = manifest.get("skill_sha256") if manifest else None
-
-        if recorded_hash and curr_hash != recorded_hash:
-            print(f"[*] Phát hiện người dùng đã tùy chỉnh SKILL.md. Giữ lại tệp để bảo toàn dữ liệu:")
-            print(f"    {target_skill}")
-        else:
-            try:
-                target_skill.unlink()
-                print(f"[+] Đã gỡ bỏ Skill: {target_skill}")
-            except Exception as e:
-                print(f"[!] Không thể xóa Skill: {e}")
-
-    # Remove references readme if present
-    if target_skill_ref_docs.exists():
-        try:
-            target_skill_ref_docs.unlink()
-        except Exception:
-            pass
-
-    # Try removing skill folders if empty
-    try:
-        if skill_ref_dir.exists() and not any(skill_ref_dir.iterdir()):
-            skill_ref_dir.rmdir()
-        if skill_dir.exists() and not any(skill_dir.iterdir()):
-            skill_dir.rmdir()
-    except Exception:
-        pass
-
-    # 3. Remove binary and core files
-    print("[3/4] Xóa tệp nhị phân và tài nguyên...")
-    if target_exe.exists():
-        try:
-            target_exe.unlink()
-            print(f"[+] Đã xóa: {target_exe.name}")
-        except Exception as e:
-            print(f"[!] Lỗi khi xóa executable (có thể đang chạy): {e}")
-
-    docs_file = install_dir / "README.md"
-    if docs_file.exists():
-        try:
-            docs_file.unlink()
-        except Exception:
-            pass
-
-    manifest_file = install_dir / "install_manifest.json"
-    if manifest_file.exists():
-        try:
-            manifest_file.unlink()
-        except Exception:
-            pass
-
-    # Remove lifecycle engine if present
-    lifecycle_dir = install_dir / "lifecycle"
-    if lifecycle_dir.exists():
-        try:
-            shutil.rmtree(lifecycle_dir, ignore_errors=True)
-            print(f"[+] Đã xóa lifecycle engine: {lifecycle_dir.name}")
-        except Exception:
-            pass
-
-    # 4. Handle remaining data / purge
-    print("[4/4] Dọn dẹp thư mục cài đặt...")
-    if purge_data:
-        try:
-            shutil.rmtree(install_dir, ignore_errors=True)
-            print(f"[+] Đã xóa toàn bộ thư mục dữ liệu {install_dir}")
-        except Exception as e:
-            print(f"[!] Lỗi khi xóa thư mục: {e}")
-    else:
-        # Check if bin dir is empty
-        try:
-            if bin_dir.exists() and not any(bin_dir.iterdir()):
-                bin_dir.rmdir()
-        except Exception:
-            pass
-        print(f"[*] Đã hoàn tất gỡ cài đặt. Dữ liệu báo cáo/cache được giữ lại tại {install_dir}.")
-
-    print("\n[+] Gỡ cài đặt hoàn tất thành công.\n")
-    return True
+    result = UninstallEngine.execute(purge_data=purge_data, silent=silent)
+    return result.status == UninstallStatus.SUCCESS
 
 
 def main() -> int:
@@ -820,15 +524,32 @@ def main() -> int:
         action="store_true",
         help="Reinstall or repair all binaries, PATH, and Skill integration.",
     )
+    parser.add_argument(
+        "--no-pause",
+        action="store_true",
+        help="Skip final pause in interactive mode.",
+    )
 
     args = parser.parse_args()
 
+    interactive = not args.silent
+
     if args.uninstall:
-        success = uninstall(silent=args.silent, purge_data=args.purge_data)
+        result = UninstallEngine.execute(purge_data=args.purge_data, silent=args.silent)
+        if interactive and not args.no_pause:
+            try:
+                input("\nNhấn Enter để đóng cửa sổ...")
+            except (EOFError, KeyboardInterrupt):
+                pass
+        return result.exit_code
     else:
         success = install(silent=args.silent, repair=args.repair)
-
-    return 0 if success else 1
+        if interactive and not args.no_pause:
+            try:
+                input("\nNhấn Enter để đóng cửa sổ...")
+            except (EOFError, KeyboardInterrupt):
+                pass
+        return 0 if success else 1
 
 
 if __name__ == "__main__":

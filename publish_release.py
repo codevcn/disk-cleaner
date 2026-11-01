@@ -37,6 +37,7 @@ ROOT_DIR = Path(__file__).resolve().parent
 INIT_FILE = ROOT_DIR / "disk_investigator" / "__init__.py"
 TARGET_EXE = ROOT_DIR / "disk_investigator.exe"
 TARGET_SETUP_EXE = ROOT_DIR / "disk-investigator-setup.exe"
+TARGET_UNINSTALL_EXE = ROOT_DIR / "disk-investigator-uninstall.exe"
 GITHUB_REPO = "codevcn/disk-cleaner"
 
 
@@ -174,8 +175,8 @@ def run_tests() -> bool:
 
 
 def build_binaries(version: str) -> bool:
-    """Packages both disk_investigator.exe and canonical disk-investigator-setup.exe."""
-    print(f"[*] [1/2] Compiling standalone CLI: disk_investigator.exe for v{version}...")
+    """Packages disk_investigator.exe, disk-investigator-setup.exe, and disk-investigator-uninstall.exe."""
+    print(f"[*] [1/3] Compiling standalone CLI: disk_investigator.exe for v{version}...")
     res_bin = run_cmd([sys.executable, "build_exe.py", "--version", version])
     if res_bin.returncode != 0:
         print(f"[ERROR] Build packaging failed for disk_investigator.exe: code {res_bin.returncode}")
@@ -184,7 +185,7 @@ def build_binaries(version: str) -> bool:
         return False
     print("[+] disk_investigator.exe compiled and verified successfully.")
 
-    print(f"[*] [2/2] Packaging 1-Click All-in-One Installer: disk-investigator-setup.exe...")
+    print(f"[*] [2/3] Packaging 1-Click All-in-One Installer: disk-investigator-setup.exe...")
     res_setup = run_cmd([sys.executable, "build_installer.py"])
     if res_setup.returncode != 0:
         print(f"[ERROR] Installer packaging failed for disk-investigator-setup.exe: code {res_setup.returncode}")
@@ -192,6 +193,15 @@ def build_binaries(version: str) -> bool:
         print(res_setup.stderr)
         return False
     print("[+] disk-investigator-setup.exe packaged and verified successfully.")
+
+    print(f"[*] [3/3] Packaging Standalone Uninstaller: disk-investigator-uninstall.exe...")
+    res_uninst = run_cmd([sys.executable, "build_uninstaller.py"])
+    if res_uninst.returncode != 0:
+        print(f"[ERROR] Uninstaller packaging failed for disk-investigator-uninstall.exe: code {res_uninst.returncode}")
+        print(res_uninst.stdout)
+        print(res_uninst.stderr)
+        return False
+    print("[+] disk-investigator-uninstall.exe packaged and verified successfully.")
 
     return True
 
@@ -246,7 +256,9 @@ def publish_release(
         "disk_investigator",
         "skills",
         "installer.py",
+        "uninstaller.py",
         "build_installer.py",
+        "build_uninstaller.py",
         "build_exe.py",
         "publish_release.py",
         "update_from_github.py",
@@ -334,7 +346,12 @@ def publish_release(
     try:
         rel_data = json.loads(verify_res.stdout)
         asset_names = [a.get("name") for a in rel_data.get("assets", [])]
-        required_assets = ["disk-investigator-setup.exe", "disk_investigator.exe", "SHA256SUMS.txt"]
+        required_assets = [
+            "disk-investigator-setup.exe",
+            "disk-investigator-uninstall.exe",
+            "disk_investigator.exe",
+            "SHA256SUMS.txt",
+        ]
         for req in required_assets:
             if req not in asset_names:
                 print(f"[ERROR] Required release asset '{req}' is missing from GitHub Release {tag_name}!")

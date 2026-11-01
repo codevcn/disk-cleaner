@@ -42,5 +42,23 @@
   - [x] V22-FINAL-12: CLI smoke tests verified for all V2.2 commands.
   - [x] V22-FINAL-13: Production release V2.2.0 sign-off.
 
-## 3. Current Status
-- **Status**: V2.2.1 Production Release (Hygiene & Documentation Patch). General-Purpose Windows AI Storage Investigator fully operational. All 13 final hardening review gates resolved.
+## 3. Completed Milestones (V2.3.0 Standalone Uninstaller & Unified Lifecycle Engine)
+- [x] Shared Core Lifecycle Engine:
+  - `disk_investigator/lifecycle/models.py`: `UninstallStatus` (SUCCESS, FAILED, CANCELLED, PARTIAL, BLOCKED) and typed `UninstallResult` with exit code mapping (0, 1, 2, 3, 4).
+  - `disk_investigator/lifecycle/common.py`: Shared constants, `RELEASE_ASSETS`, Registry User PATH safe management via winreg, SHA-256 computation, authoritative version discovery.
+  - `disk_investigator/lifecycle/uninstall_core.py`: `UninstallEngine` with preflight checks, fail-closed process safety (`ProcessState.UNKNOWN`), manifest scope validation, conservative fallback, unknown file preservation.
+- [x] Standalone Executable Uninstaller:
+  - `uninstaller.py` & `build_uninstaller.py`: Builds standalone `disk-investigator-uninstall.exe`.
+  - Interactive mode with user confirmation prompt and closing pause (`Nhấn Enter để đóng...`).
+  - Unattended mode with `--silent`.
+  - Data purge mode with `--purge-data` safely preserving unknown user files.
+- [x] Unified Lifecycle Integration:
+  - `installer.py` refactored to delegate uninstall operations directly to `UninstallEngine`.
+  - `uninstall.cmd` updated to eliminate raw recursive destructive fallbacks (`rd /s /q`).
+  - `build.cmd` updated to compile all 3 executables (`disk_investigator.exe`, `disk-investigator-setup.exe`, `disk-investigator-uninstall.exe`).
+  - `publish_release.py` updated to verify and package all 3 executables and `SHA256SUMS.txt`.
+  - `.github/workflows/ci.yml` updated to build, smoke test, and release all 3 executables.
+  - Full suite of 140 tests passing 100% green.
+
+## 4. Current Status
+- **Status**: V2.3.0 Production Release. General-Purpose Windows AI Storage Investigator with Standalone 1-Click Uninstaller and Unified Lifecycle Architecture. 140/140 unit and integration tests passing.

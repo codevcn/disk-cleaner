@@ -55,7 +55,11 @@ jobs:
         run: |
           python build_installer.py
 
-      - name: Verify Executable Functionality & V2.2 Smoke Tests
+      - name: Package Standalone Uninstaller EXE (disk-investigator-uninstall.exe)
+        run: |
+          python build_uninstaller.py
+
+      - name: Verify Executable Functionality & Smoke Tests
         run: |
           .\disk_investigator.exe --version
           .\disk_investigator.exe doctor
@@ -64,13 +68,16 @@ jobs:
           .\disk_investigator.exe cleanup-plan . --compact
           .\disk-investigator-setup.exe --version
           .\disk-investigator-setup.exe --help
+          .\disk-investigator-uninstall.exe --version
+          .\disk-investigator-uninstall.exe --help
 
       - name: Generate Cryptographic SHA-256 Manifest
         shell: pwsh
         run: |
           $setupHash = (Get-FileHash -Algorithm SHA256 .\disk-investigator-setup.exe).Hash.ToLower()
+          $uninstHash = (Get-FileHash -Algorithm SHA256 .\disk-investigator-uninstall.exe).Hash.ToLower()
           $cliHash = (Get-FileHash -Algorithm SHA256 .\disk_investigator.exe).Hash.ToLower()
-          "$setupHash  disk-investigator-setup.exe`n$cliHash  disk_investigator.exe" | Out-File -Encoding utf8 SHA256SUMS.txt
+          "$setupHash  disk-investigator-setup.exe`n$uninstHash  disk-investigator-uninstall.exe`n$cliHash  disk_investigator.exe" | Out-File -Encoding utf8 SHA256SUMS.txt
           Get-Content SHA256SUMS.txt
 
       - name: Publish GitHub Release (Tag Triggers Only)
@@ -79,6 +86,7 @@ jobs:
         with:
           files: |
             disk-investigator-setup.exe
+            disk-investigator-uninstall.exe
             disk_investigator.exe
             SHA256SUMS.txt
           generate_release_notes: true

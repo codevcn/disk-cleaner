@@ -3,7 +3,7 @@
 [![Python 3.12](https://img.shields.io/badge/python-3.12-blue.svg)](https://www.python.org/downloads/)
 [![Platform](https://img.shields.io/badge/platform-Windows%2011-0078D6.svg)](https://www.microsoft.com/windows/)
 [![Architecture](https://img.shields.io/badge/safety-HMAC--SHA256%20%7C%20RecycleBin%20%7C%20Fail--Closed-success.svg)](#safety-invariants--threat-model)
-[![Tests](https://img.shields.io/badge/tests-123%2F123%20passed%20(100%25)-brightgreen.svg)](#testing--verification)
+[![Tests](https://img.shields.io/badge/tests-140%2F140%20passed%20(100%25)-brightgreen.svg)](#testing--verification)
 [![Standalone](https://img.shields.io/badge/executable-single--file%20exe-orange.svg)](#standalone-executable-packaging)
 
 An autonomous filesystem investigation and safe storage cleanup harness designed specifically for **Google Antigravity** AI agents and power users on **Windows 11**.
@@ -128,13 +128,14 @@ No raw permanent deletion (`rmdir /s /q` or `Remove-Item -Force`) is ever perfor
 
 ## Distribution Options
 
-Disk Investigator provides three tailored distribution methods:
+Disk Investigator provides four tailored distribution assets:
 
 | Distribution | File / Command | Target User / Audience | Setup Experience |
 | :--- | :--- | :--- | :--- |
 | **1-Click All-in-One Installer (Canonical)** | `disk-investigator-setup.exe` | **End-users & AI Agents** | **Zero dependencies, single file**. Installs binary to `%LOCALAPPDATA%\DiskInvestigator\bin`, configures User `PATH` safely via Registry (`winreg`), installs Antigravity Skill (`SKILL.md`), and provides `uninstall.cmd`. |
-| **Standalone Portable EXE** | `.\disk_investigator.exe <command>` | **Advanced CLI Users** | Portable single binary. Zero runtime dependencies. Perfect for portable USB drives or air-gapped systems. |
-| **Python Developer Package** | `python -m disk_investigator <command>` | **Developers & CI/CD** | Full source code with 120+ automated unit and destructive tests. |
+| **Standalone 1-Click Uninstaller** | `disk-investigator-uninstall.exe` | **End-users & System Admins** | **Zero dependencies, single file**. 1-Click clean uninstallation of Disk Investigator. Restores User PATH, removes binary and unmodified skill, preserves customized files and user backups. Supports `--purge-data` and `--silent`. |
+| **Standalone Portable CLI** | `.\disk_investigator.exe <command>` | **Advanced CLI Users** | Portable single binary. Zero runtime dependencies. Perfect for portable USB drives or air-gapped systems. |
+| **Python Developer Package** | `python -m disk_investigator <command>` | **Developers & CI/CD** | Full source code with 140+ automated unit and destructive tests. |
 
 ---
 
@@ -158,12 +159,26 @@ For end-users who just want to download a single file and immediately have full 
 - **Auditable Manifest**: Generates `%LOCALAPPDATA%\DiskInvestigator\install_manifest.json` with cryptographic SHA-256 hashes of all deployed files.
 - **Automated Smoke Test**: Runs `disk_investigator --version` and `doctor` to verify readiness.
 
-### Uninstallation
-To cleanly remove Disk Investigator from your system:
-- Run `%LOCALAPPDATA%\DiskInvestigator\uninstall.cmd`
-- Or run: `disk-investigator-setup.exe --uninstall`
-- To also remove cached scans and history: `disk-investigator-setup.exe --uninstall --purge-data`
-*(Note: If you customized your `SKILL.md`, the uninstaller automatically detects the difference and preserves your customized skill!)*
+---
+
+## Standalone Uninstaller (`disk-investigator-uninstall.exe`)
+
+To cleanly remove Disk Investigator from your system, choose any of these convenient methods:
+1. **Dedicated Uninstaller EXE**: Download and run **`disk-investigator-uninstall.exe`** directly from [GitHub Releases](https://github.com/codevcn/disk-cleaner/releases/latest).
+2. **Local Shortcut**: Run `%LOCALAPPDATA%\DiskInvestigator\uninstall.cmd`.
+3. **Installer CLI Flag**: Run `disk-investigator-setup.exe --uninstall`.
+
+### Uninstaller Features & Safety Invariants:
+- **Registry Restoration**: Cleanly removes `%LOCALAPPDATA%\DiskInvestigator\bin` from User PATH and broadcasts `WM_SETTINGCHANGE`.
+- **Fail-Closed Process Protection**: Checks if `disk_investigator.exe` is running and aborts before any modifications. If process status is `UNKNOWN`, fails closed. Never terminates user processes.
+- **Customization Preservation**: Checks cryptographic SHA-256 hash of `SKILL.md`. If customized by user or if backup files exist, they are 100% preserved.
+- **Conservative Purge Mode (`--purge-data`)**: Removes tool-owned directories (`cache`, `logs`, `plans`) but **never deletes unknown user files**.
+- **Deterministic Exit Codes**:
+  - `0`: SUCCESS
+  - `1`: FAILED
+  - `2`: CANCELLED
+  - `3`: PARTIAL
+  - `4`: BLOCKED
 
 ---
 
@@ -184,12 +199,14 @@ build.cmd
 2. Verifies PyInstaller is installed.
 3. Compiles `disk_investigator.exe` via `build_exe.py`.
 4. Compiles the canonical 1-Click installer `disk-investigator-setup.exe` via `build_installer.py`.
-5. Enforces transactional builds and post-compilation quality gates.
+5. Compiles the standalone uninstaller `disk-investigator-uninstall.exe` via `build_uninstaller.py`.
+6. Enforces transactional builds and post-compilation quality gates.
 
 ### Packaging Scripts
 - **`build_exe.py`**: Compiles standalone CLI binary `disk_investigator.exe` and updates `build_history.json`.
 - **`build_installer.py`**: Packages `installer.py` embedding `disk_investigator.exe`, `SKILL.md`, and `README.md` into `disk-investigator-setup.exe`.
-- **`publish.cmd` / `publish_release.py`**: Verifies quality gate tests, checks clean git tree, enforces immutable releases (hard abort if tag exists), and publishes both assets to GitHub Releases.
+- **`build_uninstaller.py`**: Packages `uninstaller.py` embedding `SKILL.md` into standalone `disk-investigator-uninstall.exe`.
+- **`publish.cmd` / `publish_release.py`**: Verifies quality gate tests, checks clean git tree, enforces immutable releases (hard abort if tag exists), and publishes all 3 binary assets + `SHA256SUMS.txt` to GitHub Releases.
 
 ### Single-Executable Invariant & Build History (`build_history.json`)
 
