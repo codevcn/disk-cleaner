@@ -260,9 +260,11 @@ def publish_release(
         "build_installer.py",
         "build_uninstaller.py",
         "build_exe.py",
+        "build_history.json",
         "publish_release.py",
         "update_from_github.py",
         "README.md",
+        "PROJECT_STATE.md",
         ".github",
         ".gitignore",
         "build.cmd",
@@ -272,7 +274,7 @@ def publish_release(
     for p in explicit_paths:
         run_cmd(["git", "add", p])
 
-    diff_check = run_cmd(["git", "status", "--porcelain"])
+    diff_check = run_cmd(["git", "diff", "--cached", "--name-only"])
     if diff_check.stdout.strip():
         commit_res = run_cmd(["git", "commit", "-m", f"release: {release_title}"])
         if commit_res.returncode != 0:
@@ -280,7 +282,7 @@ def publish_release(
             return False
         print(f"[+] Committed: release: {release_title}")
     else:
-        print("[*] No uncommitted changes detected in working tree.")
+        print("[*] No staged changes to commit in working tree.")
 
     # 2. Git Push Main
     print("[2/5] Pushing commits to GitHub origin/main...")
