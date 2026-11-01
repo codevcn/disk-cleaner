@@ -43,4 +43,4 @@
   - [x] V22-FINAL-13: Production release V2.2.0 sign-off.
 
 ## 3. Current Status
-- **Status**: V2.2.0 Final Production Release. General-Purpose Windows AI Storage Investigator fully operational. All 13 final hardening review gates resolved.
+- **Status**: V2.2.1 Production Release (Hygiene & Documentation Patch). General-Purpose Windows AI Storage Investigator fully operational. All 13 final hardening review gates resolved.

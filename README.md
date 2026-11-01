@@ -273,14 +273,14 @@ update.cmd
 When you finish implementing a new feature or bugfix, publish a new release to GitHub with 1 command:
 
 ```cmd
-# Publish patch update (e.g. v2.2.0 -> v2.2.1)
+# Publish patch update (e.g. v2.2.1 -> v2.2.2)
 publish.cmd --bump-patch "fix: improve path resolution"
 
-# Publish minor update (e.g. v2.2.0 -> v2.3.0)
+# Publish minor update (e.g. v2.2.1 -> v2.3.0)
 publish.cmd --bump-minor "feat: add specialized cache cleaner"
 
 # Publish specific version
-publish.cmd --version 2.2.1 "release v2.2.1"
+publish.cmd --version 2.2.2 "release v2.2.2"
 
 # Dry-run simulation (without committing or pushing)
 publish.cmd --bump-patch --dry-run "test release pipeline"
@@ -576,7 +576,7 @@ d:\D-Personal\disk-cleaner\
 ├── PROJECT_STATE.md          # Current project state & audit log
 │
 ├── disk_investigator/        # Core Python package
-│   ├── __init__.py           # Package version definition (v2.2.0)
+│   ├── __init__.py           # Package version definition (v2.2.1)
 │   ├── __main__.py           # Application entry point
 │   ├── cli.py                # Command-line interface & argument parser
 │   ├── capabilities.py       # Host environment & tool capability discovery
