@@ -65,6 +65,25 @@ def build_parser() -> argparse.ArgumentParser:
         help="Inspect host environment, runtimes, and tool capabilities",
     )
 
+    # Command: discover-capabilities
+    caps_parser = subparsers.add_parser(
+        "discover-capabilities",
+        aliases=["capabilities"],
+        help="Discover installed applications and system ecosystem capabilities",
+    )
+
+    # Command: investigate
+    inv_parser = subparsers.add_parser(
+        "investigate",
+        help="Comprehensive multi-domain storage investigation across system, browser, office, creator, gaming, dev, and AI/ML",
+    )
+    inv_parser.add_argument(
+        "path",
+        nargs="?",
+        default=".",
+        help="Target directory to investigate (default: current directory)",
+    )
+
     # Command: overview
     overview_parser = subparsers.add_parser(
         "overview",
@@ -281,6 +300,25 @@ def main(args: Optional[List[str]] = None) -> int:
             _json_output({"status": "success", "doctor": report}, pretty=pretty)
             return 0
 
+        if parsed.command in ("discover-capabilities", "capabilities"):
+            from .discovery.capability_discovery import CapabilityDiscovery
+            discovery = CapabilityDiscovery()
+            caps = discovery.discover_all()
+            _json_output({
+                "status": "success",
+                "capabilities": {k: v.to_dict() for k, v in caps.items() if v.detected},
+            }, pretty=pretty)
+            return 0
+
+        if parsed.command == "investigate":
+            from .path_policy import canonicalize_path
+            from .services.investigation_service import InvestigationService
+            svc = InvestigationService()
+            target_p = canonicalize_path(parsed.path)
+            res = svc.investigate(target_path=target_p)
+            _json_output({"status": "success", "investigation": res.to_dict()}, pretty=pretty)
+            return 0
+
         if parsed.command == "check-update":
             info = check_for_updates(__version__, force=parsed.force)
             _json_output({"status": "success", "update_info": info}, pretty=pretty)
@@ -368,14 +406,21 @@ def main(args: Optional[List[str]] = None) -> int:
             return 0
 
         elif parsed.command == "cleanup-plan":
-            detector = DeveloperDetector()
-            candidates = detector.scan_project_tree(parsed.path)
-            if parsed.include_global:
-                candidates.extend(detector.detect_known_global_caches())
+            from .path_policy import canonicalize_path
+            from .services.investigation_service import InvestigationService
+            target_p = canonicalize_path(parsed.path)
+            svc = InvestigationService()
+            inv_res = svc.investigate(target_path=target_p)
 
-            cand_dicts = [a.to_dict() for a in candidates]
+            candidates: List[Any] = list(inv_res.artifacts)
+
+            # Also include legacy global dev caches if requested
+            if getattr(parsed, "include_global", False):
+                dev_det = DeveloperDetector()
+                candidates.extend(dev_det.detect_known_global_caches())
+
             planner = PlanGenerator()
-            plan = planner.generate_plan(target_root=parsed.path, candidates=cand_dicts)
+            plan = planner.generate_plan(target_root=target_p, candidates=candidates)
             _json_output({"status": "success", "plan": plan.to_dict()}, pretty=pretty)
             return 0
 

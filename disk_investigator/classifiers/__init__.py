@@ -1,7 +1,8 @@
 """
-Classifiers package for disk_investigator.
+Classifiers and Policy Engines for disk_investigator.
 """
 
+from .artifact_policy import ArtifactPolicyEngine
 from .risk_classifier import (
     ClassificationResult,
     Confidence,
@@ -16,4 +17,5 @@ __all__ = [
     "Disposition",
     "RiskClassifier",
     "RiskLevel",
+    "ArtifactPolicyEngine",
 ]

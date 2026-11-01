@@ -19,11 +19,13 @@ import uuid
 from dataclasses import dataclass, field
 from enum import Enum
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Union
 
 from ..capabilities import get_default_cache_dir
 from ..classifiers.risk_classifier import Disposition, RiskClassifier, RiskLevel
+from ..models import RecommendedAction, StorageArtifact, UserDataProbability
 from ..path_policy import canonicalize_path, determine_node_kind
+from .action_types import ActionType
 
 PLAN_ID_REGEX = re.compile(r"^plan_[0-9a-f]{8,32}$")
 
@@ -96,10 +98,11 @@ def compute_plan_hash(
     total_immediate_reclaimable_bytes: Optional[int] = None,
     total_recycle_bin_bytes: Optional[int] = None,
     total_potential_reclaim_bytes: Optional[int] = None,
+    schema_version: int = 2,
 ) -> str:
     """
     Computes an HMAC-SHA256 signature for a CleanupPlan covering all fields:
-    plan metadata, total figures, and full item payloads.
+    plan metadata, total figures, full item payloads, and schema_version.
     Provides true plan tamper protection against adversarial JSON editing.
     """
     if secret_key is None:
@@ -132,6 +135,7 @@ def compute_plan_hash(
         })
 
     payload = {
+        "schema_version": schema_version,
         "plan_id": plan_id,
         "target_root": canonicalize_path(target_root),
         "created_at": created_at,
@@ -181,13 +185,6 @@ def validate_plan_schema(plan: CleanupPlan) -> None:
         raise ValueError(
             f"SECURITY REFUSAL: Invalid non-positive item_id in plan {plan.plan_id}."
         )
-
-
-class ActionType(str, Enum):
-    RECYCLE_PATH = "RECYCLE_PATH"
-    NPM_CACHE_CLEAN = "NPM_CACHE_CLEAN"
-    PIP_CACHE_PURGE = "PIP_CACHE_PURGE"
-    DOCKER_BUILDER_PRUNE = "DOCKER_BUILDER_PRUNE"
 
 
 @dataclass
@@ -263,9 +260,11 @@ class CleanupPlan:
     total_potential_reclaim_bytes: int
     plan_hash: str = ""
     items: List[PlanItem] = field(default_factory=list)
+    schema_version: int = 2
 
     def to_dict(self) -> Dict[str, Any]:
         return {
+            "schema_version": self.schema_version,
             "plan_id": self.plan_id,
             "target_root": self.target_root,
             "created_at": self.created_at,
@@ -293,6 +292,7 @@ class CleanupPlan:
             ),
             plan_hash=data.get("plan_hash", ""),
             items=[PlanItem.from_dict(i) for i in data.get("items", [])],
+            schema_version=data.get("schema_version", 1),
         )
 
 
@@ -311,27 +311,38 @@ class PlanGenerator:
     def generate_plan(
         self,
         target_root: str,
-        candidates: List[Dict[str, Any]],
+        candidates: List[Any],
     ) -> CleanupPlan:
         plan_id = f"plan_{uuid.uuid4().hex[:8]}"
         items: List[PlanItem] = []
-
-        total_candidates = 0
-        total_immediate = 0
-        total_recycle = 0
         current_id = 1
 
         for c in candidates:
-            p = canonicalize_path(c.get("path", ""))
-            a_type = c.get("artifact_type")
-            sz = c.get("logical_bytes", 0)
+            if isinstance(c, StorageArtifact):
+                p = canonicalize_path(c.canonical_path or c.path)
+                a_type = c.artifact_type
+                sz = c.logical_bytes
+                owner_app = c.owner_app
+                warning = None
+
+                # Hard blocked or review-only items are strictly excluded from cleanup plans
+                if c.recommended_action in (RecommendedAction.BLOCK, RecommendedAction.REVIEW_ONLY):
+                    continue
+                if c.user_data_probability != UserDataProbability.LOW:
+                    continue
+            else:
+                p = canonicalize_path(c.get("path", ""))
+                a_type = c.get("artifact_type")
+                sz = c.get("logical_bytes", 0)
+                owner_app = c.get("owner_app")
+                warning = c.get("warning")
 
             # Classify item
             classification = self.classifier.classify(
                 path=p,
                 artifact_type=a_type,
-                owner_app=c.get("owner_app"),
-                stale_candidate=c.get("stale_candidate", False),
+                owner_app=owner_app,
+                stale_candidate=getattr(c, "stale_candidate", False) if not isinstance(c, StorageArtifact) else False,
             )
 
             # Hard blocked items are strictly excluded from cleanup plans
@@ -351,7 +362,7 @@ class PlanGenerator:
             immediate_b = 0
             recycle_b = 0
 
-            if a_type == "package_cache" and c.get("owner_app") == "npm":
+            if a_type == "package_cache" and owner_app == "npm":
                 active_npm = get_tool_cache_path("npm")
                 # Bind typed action only if candidate path matches active tool cache
                 if active_npm and p.lower() == active_npm:
@@ -360,7 +371,7 @@ class PlanGenerator:
                 else:
                     action = ActionType.RECYCLE_PATH
                     recycle_b = sz
-            elif a_type == "package_cache" and c.get("owner_app") == "pip":
+            elif a_type == "package_cache" and owner_app == "pip":
                 active_pip = get_tool_cache_path("pip")
                 # Bind typed action only if candidate path matches active tool cache
                 if active_pip and p.lower() == active_pip:
@@ -372,6 +383,21 @@ class PlanGenerator:
             elif a_type == "docker_builder":
                 action = ActionType.DOCKER_BUILDER_PRUNE
                 immediate_b = sz
+            elif a_type == "browser_cache":
+                action = ActionType.BROWSER_CACHE_PURGE
+                recycle_b = sz
+            elif a_type in ("office_file_cache", "teams_cache"):
+                action = ActionType.OFFICE_CACHE_PURGE
+                recycle_b = sz
+            elif a_type in ("adobe_media_cache", "davinci_render_cache", "capcut_cache"):
+                action = ActionType.CREATOR_CACHE_PURGE
+                recycle_b = sz
+            elif a_type in ("steam_shader_cache", "steam_downloading"):
+                action = ActionType.GAMING_CACHE_PURGE
+                recycle_b = sz
+            elif a_type in ("obs_log_dir", "obs_crash_dir"):
+                action = ActionType.STREAMING_LOGS_PURGE
+                recycle_b = sz
             else:
                 action = ActionType.RECYCLE_PATH
                 # Moving to Recycle Bin does not immediately reclaim disk space on the volume!
@@ -392,13 +418,33 @@ class PlanGenerator:
                 immediate_reclaimable_bytes=immediate_b,
                 recycle_bin_bytes=recycle_b,
                 potential_reclaim_bytes=immediate_b + recycle_b,
-                warning=c.get("warning"),
+                warning=warning,
             )
             items.append(item)
-            total_candidates += sz
-            total_immediate += immediate_b
-            total_recycle += recycle_b
             current_id += 1
+
+        # Reject / filter out overlapping items (child paths inside parent paths)
+        non_overlapping_items: List[PlanItem] = []
+        for itm in sorted(items, key=lambda x: len(x.path)):
+            itm_canon = canonicalize_path(itm.path).lower()
+            is_overlap = False
+            for parent_itm in non_overlapping_items:
+                parent_canon = canonicalize_path(parent_itm.path).lower().rstrip("\\/") + "\\"
+                if itm_canon.startswith(parent_canon):
+                    is_overlap = True
+                    break
+            if not is_overlap:
+                non_overlapping_items.append(itm)
+
+        # Re-number item_ids sequentially starting at 1
+        for idx, itm in enumerate(non_overlapping_items, start=1):
+            itm.item_id = idx
+
+        items = non_overlapping_items
+
+        total_candidates = sum(i.candidate_bytes for i in items)
+        total_immediate = sum(i.immediate_reclaimable_bytes for i in items)
+        total_recycle = sum(i.recycle_bin_bytes for i in items)
 
         created_at = datetime.datetime.now(datetime.timezone.utc).isoformat()
         target_root_canon = canonicalize_path(target_root)
@@ -414,6 +460,7 @@ class PlanGenerator:
             total_immediate_reclaimable_bytes=total_immediate,
             total_recycle_bin_bytes=total_recycle,
             total_potential_reclaim_bytes=total_potential,
+            schema_version=2,
         )
 
         plan = CleanupPlan(
@@ -427,7 +474,12 @@ class PlanGenerator:
             total_potential_reclaim_bytes=total_potential,
             plan_hash=plan_hash,
             items=items,
+            schema_version=2,
         )
+
+        # Save plan to cache
+        self.save_plan(plan)
+        return plan
 
         # Save plan to cache
         self.save_plan(plan)

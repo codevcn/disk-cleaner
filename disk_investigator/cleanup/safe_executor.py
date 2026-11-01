@@ -33,6 +33,7 @@ from ..path_policy import (
     is_safe_fixed_drive,
     resolve_windows_aliases,
 )
+from .action_registry import ActionRegistry, create_default_action_registry
 from .plan_generator import (
     ActionType,
     CleanupPlan,
@@ -153,13 +154,19 @@ class ExecutionResult:
 class SafeExecutor:
     """Pre-flights and executes explicit approved plan items with untrusted plan protection."""
 
-    def __init__(self, secret_key: Optional[bytes] = None, cache_dir: Optional[Any] = None):
+    def __init__(
+        self,
+        secret_key: Optional[bytes] = None,
+        cache_dir: Optional[Any] = None,
+        action_registry: Optional[ActionRegistry] = None,
+    ):
         if cache_dir is not None:
             self.cache_dir = Path(cache_dir)
         else:
             self.cache_dir = get_default_cache_dir() / "plans"
         self.cache_dir.mkdir(parents=True, exist_ok=True)
         self.secret_key = secret_key or get_plan_signing_key(self.cache_dir)
+        self.action_registry = action_registry or create_default_action_registry()
 
     def preflight_check(self, item: PlanItem) -> Optional[str]:
         """
@@ -254,6 +261,11 @@ class SafeExecutor:
         if not item_ids:
             raise ValueError("Explicit item_ids list is required. Bulk cleanup without item selection is forbidden.")
 
+        # 0. Check plan schema version (enforce version 2)
+        schema_version = getattr(plan, "schema_version", 1)
+        if schema_version != 2:
+            raise PlanIntegrityError(f"LEGACY_PLAN_UNSUPPORTED: Plan schema version {schema_version} is unsupported. Only schema version 2 is accepted.")
+
         # 1. Structural schema validation (duplicate IDs, count mismatch, non-positive IDs)
         validate_plan_schema(plan)
 
@@ -274,6 +286,7 @@ class SafeExecutor:
             total_immediate_reclaimable_bytes=plan.total_immediate_reclaimable_bytes,
             total_recycle_bin_bytes=plan.total_recycle_bin_bytes,
             total_potential_reclaim_bytes=plan.total_potential_reclaim_bytes,
+            schema_version=schema_version,
         )
         import hmac
         if not hmac.compare_digest(plan_hash, expected_hash):
@@ -322,48 +335,24 @@ class SafeExecutor:
                 result.projected_potential_reclaimed_bytes += item.potential_reclaim_bytes
                 continue
 
-            # Actual execution via typed action handlers
+            # Actual execution via ActionRegistry
             try:
-                if item.action_type == ActionType.RECYCLE_PATH:
-                    send_to_recycle_bin(item.path)
+                action_res = self.action_registry.execute_action(item, dry_run=False)
+                if action_res.get("status") == "APP_RUNNING_SKIP":
+                    result.failed_items.append({
+                        "item_id": item_id,
+                        "path": item.path,
+                        "error": action_res.get("error", "Application is actively running. Skipped for safety."),
+                    })
+                elif action_res.get("recycle_bin"):
                     result.succeeded_items.append(item_id)
                     result.recycle_bin_bytes += item.recycle_bin_bytes
                     result.potential_reclaimed_bytes += item.recycle_bin_bytes
-
-                elif item.action_type == ActionType.NPM_CACHE_CLEAN:
-                    npm_exe = shutil.which("npm.cmd") or shutil.which("npm")
-                    if not npm_exe:
-                        result.failed_items.append({"item_id": item_id, "path": item.path, "error": "npm executable not found on PATH"})
-                        continue
-                    proc = subprocess.run([npm_exe, "cache", "clean", "--force"], capture_output=True, timeout=30, shell=False)
-                    if proc.returncode == 0:
-                        result.succeeded_items.append(item_id)
-                        result.immediate_reclaimed_bytes += item.immediate_reclaimable_bytes
-                        result.potential_reclaimed_bytes += item.immediate_reclaimable_bytes
-                    else:
-                        result.failed_items.append({"item_id": item_id, "path": item.path, "error": proc.stderr.decode()})
-
-                elif item.action_type == ActionType.PIP_CACHE_PURGE:
-                    proc = subprocess.run([sys.executable, "-m", "pip", "cache", "purge"], capture_output=True, timeout=30, shell=False)
-                    if proc.returncode == 0:
-                        result.succeeded_items.append(item_id)
-                        result.immediate_reclaimed_bytes += item.immediate_reclaimable_bytes
-                        result.potential_reclaimed_bytes += item.immediate_reclaimable_bytes
-                    else:
-                        result.failed_items.append({"item_id": item_id, "path": item.path, "error": proc.stderr.decode()})
-
-                elif item.action_type == ActionType.DOCKER_BUILDER_PRUNE:
-                    docker_exe = shutil.which("docker.exe") or shutil.which("docker")
-                    if not docker_exe:
-                        result.failed_items.append({"item_id": item_id, "path": item.path, "error": "docker executable not found on PATH"})
-                        continue
-                    proc = subprocess.run([docker_exe, "builder", "prune", "-f"], capture_output=True, timeout=30, shell=False)
-                    if proc.returncode == 0:
-                        result.succeeded_items.append(item_id)
-                        result.immediate_reclaimed_bytes += item.immediate_reclaimable_bytes
-                        result.potential_reclaimed_bytes += item.immediate_reclaimable_bytes
-                    else:
-                        result.failed_items.append({"item_id": item_id, "path": item.path, "error": proc.stderr.decode()})
+                else:
+                    result.succeeded_items.append(item_id)
+                    reclaimed = action_res.get("bytes_reclaimed", item.immediate_reclaimable_bytes)
+                    result.immediate_reclaimed_bytes += reclaimed
+                    result.potential_reclaimed_bytes += reclaimed
 
             except Exception as e:
                 result.failed_items.append({"item_id": item_id, "path": item.path, "error": str(e)})

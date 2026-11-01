@@ -1,45 +1,53 @@
-# Disk Investigator (Windows 11)
+# General-Purpose Windows AI Storage Investigator (Windows 11)
 
 [![Python 3.12](https://img.shields.io/badge/python-3.12-blue.svg)](https://www.python.org/downloads/)
 [![Platform](https://img.shields.io/badge/platform-Windows%2011-0078D6.svg)](https://www.microsoft.com/windows/)
-[![Architecture](https://img.shields.io/badge/safety-HMAC--SHA256%20%7C%20RecycleBin-success.svg)](#safety-invariants--threat-model)
-[![Tests](https://img.shields.io/badge/tests-44%2F44%20passed%20(100%25)-brightgreen.svg)](#testing--verification)
+[![Architecture](https://img.shields.io/badge/safety-HMAC--SHA256%20%7C%20RecycleBin%20%7C%20Fail--Closed-success.svg)](#safety-invariants--threat-model)
+[![Tests](https://img.shields.io/badge/tests-114%2F114%20passed%20(100%25)-brightgreen.svg)](#testing--verification)
 [![Standalone](https://img.shields.io/badge/executable-single--file%20exe-orange.svg)](#standalone-executable-packaging)
 
 An autonomous filesystem investigation and safe storage cleanup harness designed specifically for **Google Antigravity** AI agents and power users on **Windows 11**.
 
+Transformed from a developer-only cleaner into a **General-Purpose Windows AI Storage Investigator**, covering 8 major software ecosystems: **System, Browser, Office, Creator, Streaming, Gaming, Developer, and AI/ML**, with strict healthcare/medical data protections.
+
 Instead of a traditional "black-box" disk cleaner that blindly wipes files without context, **Disk Investigator** provides a conversational, forensic, and auditable storage optimization workflow:
 
-$$\text{Fast Overview} \longrightarrow \text{Targeted Drilldown} \longrightarrow \text{Semantic Explanation} \longrightarrow \text{Auditable Plan} \longrightarrow \text{Human Approval Gate} \longrightarrow \text{Safe Execution} \longrightarrow \text{Verification}$$
+$$\text{Capabilities} \longrightarrow \text{Investigation} \longrightarrow \text{Semantic Explanation} \longrightarrow \text{Auditable Plan v2} \longrightarrow \text{Human Approval Gate} \longrightarrow \text{Safe Execution} \longrightarrow \text{Verification}$$
 
 ---
 
 ## Table of Contents
 
 1. [Architectural Overview](#architectural-overview)
-2. [Safety Invariants & Threat Model](#safety-invariants--threat-model)
-3. [Dual Distribution Options](#dual-distribution-options)
-4. [Standalone Executable Packaging](#standalone-executable-packaging)
-   - [One-Click Build (`build.cmd`)](#one-click-build-buildcmd)
-   - [Python Packaging Script (`build_exe.py`)](#python-packaging-script-build_exepy)
-   - [Single-Executable Invariant & Build History (`build_history.json`)](#single-executable-invariant--build-history-build_historyjson)
-5. [Autonomous GitHub Update Workflow](#autonomous-github-update-workflow)
-   - [Automated Version Checking](#automated-version-checking-on-each-run)
-   - [One-Click Agent Update (`update_from_github.py` / `update.cmd`)](#one-click-agent-update-update_from_githubpy--updatecmd)
-6. [Complete CLI Command Reference](#complete-cli-command-reference)
-   - [`doctor`](#1-doctor---environment--runtime-capabilities)
-   - [`overview`](#2-overview---high-level-drive-analysis-50ms)
-   - [`scan`](#3-scan---recursive-filesystem-scanning)
-   - [`drilldown`](#4-drilldown---targeted-forensic-drilldown)
-   - [`detect-dev`](#5-detect-dev---developer-artifacts--stale-caches)
-   - [`detect-docker`](#6-detect-docker---wsl2-vhdx--docker-storage)
-   - [`detect-large`](#7-detect-large---large-files-discovery)
-   - [`cleanup-plan`](#8-cleanup-plan---cryptographically-signed-plan-generation)
-   - [`execute-plan`](#9-execute-plan---two-phase-safe-execution)
-   - [`check-update`](#10-check-update---github-release-inspection)
-7. [AI Agent Integration (Google Antigravity Skill)](#ai-agent-integration-google-antigravity-skill)
-8. [Testing & Verification](#testing--verification)
-9. [Project Structure](#project-structure)
+2. [Multi-Domain Coverage](#multi-domain-coverage)
+3. [Safety Invariants & Threat Model](#safety-invariants--threat-model)
+4. [Complete CLI Command Reference](#complete-cli-command-reference)
+   - [`discover-capabilities`](#1-discover-capabilities---non-invasive-ecosystem-probes)
+   - [`investigate`](#2-investigate---full-storage-investigation)
+   - [`cleanup-plan`](#3-cleanup-plan---cryptographically-signed-plan-schema-v2)
+   - [`execute-plan`](#4-execute-plan---two-phase-safe-execution)
+   - [`doctor`](#5-doctor---environment--runtime-capabilities)
+   - [`overview`](#6-overview---high-level-drive-analysis-50ms)
+   - [`scan`](#7-scan---recursive-filesystem-scanning)
+   - [`drilldown`](#8-drilldown---targeted-forensic-drilldown)
+5. [AI Agent Integration (Google Antigravity Skill)](#ai-agent-integration-google-antigravity-skill)
+6. [Testing & Verification](#testing--verification)
+
+---
+
+## Multi-Domain Coverage
+
+| Domain | Cleanable Ephemeral Caches (TYPED_CLEANUP / RECYCLE) | Strictly Protected User Data (BLOCK / REVIEW_ONLY) |
+|---|---|---|
+| **System** | `%TEMP%` (>24h stale), `%LOCALAPPDATA%\Temp` | `%WINDIR%\System32`, System crash dumps (REVIEW_ONLY) |
+| **Browser** | Chrome & Edge `Cache`, `Code Cache`, `GPUCache` | `History`, `Login Data`, `Cookies`, `Bookmarks`, `Sessions` (BLOCK) |
+| **Office** | Office File Cache, Teams `Cache` / `blob_storage` | Outlook `.pst` (BLOCK), `.ost` offline mailbox (REVIEW_ONLY) |
+| **Creator** | Premiere Media Cache, After Effects Disk Cache, CapCut cache, DaVinci `CacheClip` | Original video footage, `.prproj`, `.aep`, `.resolve` project DBs (BLOCK) |
+| **Streaming** | OBS Studio `logs`, `crashes` | OBS stream recordings (`.mkv`, `.mp4`, `.flv`) (BLOCK) |
+| **Gaming** | Steam Vulkan/DX `shadercache`, unfinished downloads | Steam installed games (`steamapps\common\*`), saves, mods (REVIEW_ONLY) |
+| **Developer** | `node_modules` (with lockfile), `.venv`, cargo `target`, `.next`, `__pycache__` | Source code, uncommitted git trees, Docker `ext4.vhdx` (BLOCK) |
+| **AI / ML** | (None silently deleted) | Ollama model weights, HuggingFace model cache (REVIEW_ONLY) |
+| **Healthcare** | (None) | DICOM medical scans (`.dcm`, `.dicom`, DICM header) (BLOCK) |
 
 ---
 
