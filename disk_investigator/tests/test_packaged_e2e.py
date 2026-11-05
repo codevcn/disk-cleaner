@@ -129,15 +129,15 @@ class TestPackagedSelfUpdateE2E(unittest.TestCase):
             except Exception:
                 pass
 
-    @unittest.skipUnless(SETUP_EXE.exists(), "Requires compiled disk-investigator-setup.exe in workspace root")
+    @unittest.skipUnless(SETUP_EXE.exists() and CLI_EXE.exists(), "Requires compiled disk-investigator-setup.exe and disk_investigator.exe in workspace root")
     def test_packaged_self_update_success_e2e(self):
         """
         UPDATE-FINAL-23 / Gate 29: True Packaged E2E Self-Update.
-        Old installed version (2.3.2) -> 'update --yes' -> downloads real packaged setup v2.4.2
+        Old installed version (2.3.2) -> packaged CLI_EXE 'update --yes' -> downloads real packaged setup
         from local HTTP server -> verifies SHA256 -> verifies setup version -> spawns installer
-        with --wait-for-pid -> installer transactional replacement -> new version 2.4.2 verified.
+        with --wait-for-pid -> installer transactional replacement -> new version verified.
         """
-        target_version = "2.4.2"
+        target_version = "2.4.3"
 
         # 1. Simulate existing installed state of older version v2.3.2
         target_bin = self.bin_dir / "disk_investigator.exe"
@@ -162,7 +162,7 @@ class TestPackagedSelfUpdateE2E(unittest.TestCase):
         server.start()
 
         try:
-            # 3. Execute 'disk_investigator update --yes' in isolated environment simulating v2.3.2
+            # 3. Execute packaged 'disk_investigator.exe update --yes' in isolated environment simulating v2.3.2
             env = os.environ.copy()
             env["LOCALAPPDATA"] = str(self.localappdata)
             env["USERPROFILE"] = str(self.userprofile)
@@ -170,7 +170,7 @@ class TestPackagedSelfUpdateE2E(unittest.TestCase):
             env["DISK_INVESTIGATOR_CURRENT_VERSION_OVERRIDE"] = "2.3.2"
             env["DISK_INVESTIGATOR_NO_UPDATE_CHECK"] = "1"
 
-            cmd = [sys.executable, "-m", "disk_investigator.cli", "update", "--yes"]
+            cmd = [str(CLI_EXE), "update", "--yes"]
             proc = subprocess.run(
                 cmd,
                 env=env,
@@ -226,7 +226,7 @@ class TestPackagedSelfUpdateE2E(unittest.TestCase):
         finally:
             server.stop()
 
-    @unittest.skipUnless(SETUP_EXE.exists(), "Requires compiled disk-investigator-setup.exe in workspace root")
+    @unittest.skipUnless(SETUP_EXE.exists() and CLI_EXE.exists(), "Requires compiled disk-investigator-setup.exe and disk_investigator.exe in workspace root")
     def test_packaged_self_update_rollback_on_failure_e2e(self):
         """
         UPDATE-FINAL-23 / Gate 30: True Packaged Rollback E2E.
@@ -234,7 +234,7 @@ class TestPackagedSelfUpdateE2E(unittest.TestCase):
         it must cleanly abort, execute transactional rollback, preserve prior version v2.3.2,
         write receipt with status='failed' and rollback_attempted=True, and release update.lock.
         """
-        target_version = "2.4.2"
+        target_version = "2.4.3"
 
         # 1. Existing installed state of v2.3.2
         target_bin = self.bin_dir / "disk_investigator.exe"
@@ -269,7 +269,7 @@ class TestPackagedSelfUpdateE2E(unittest.TestCase):
             env["DISK_INVESTIGATOR_CURRENT_VERSION_OVERRIDE"] = "2.3.2"
             env["DISK_INVESTIGATOR_NO_UPDATE_CHECK"] = "1"
 
-            cmd = [sys.executable, "-m", "disk_investigator.cli", "update", "--yes"]
+            cmd = [str(CLI_EXE), "update", "--yes"]
             proc = subprocess.run(
                 cmd,
                 env=env,

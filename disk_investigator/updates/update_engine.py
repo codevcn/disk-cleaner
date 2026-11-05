@@ -273,6 +273,7 @@ class UpdateEngine:
             )
 
         installer_launched = False
+        retain_lock_on_failure = False
         try:
             client = release_client or GitHubReleaseClient(repo=self.cache_mgr.repo)
             try:
@@ -497,19 +498,45 @@ class UpdateEngine:
             # Transfer update.lock ownership to installer PID (Fail-Closed)
             transfer_ok = self.transfer_update_lock_to_installer(installer_pid=proc.pid, target_version=target_version)
             if not transfer_ok:
+                child_exited = False
                 try:
                     proc.terminate()
+                    try:
+                        proc.wait(timeout=5.0)
+                        child_exited = True
+                    except Exception:
+                        try:
+                            proc.kill()
+                            proc.wait(timeout=3.0)
+                            child_exited = True
+                        except Exception:
+                            pass
                 except Exception:
                     pass
-                self.release_update_lock()
-                return UpdateResult(
-                    state=UpdateState.FAILED,
-                    from_version=current_version,
-                    target_version=target_version,
-                    release_url=rel.release_url,
-                    message="Failed to transfer update lock ownership to installer (Fail-Closed).",
-                    error="Atomic lock transfer failed.",
-                )
+
+                if not child_exited:
+                    if check_pid_state(proc.pid) == PidWaitState.EXITED:
+                        child_exited = True
+
+                if child_exited:
+                    return UpdateResult(
+                        state=UpdateState.FAILED,
+                        from_version=current_version,
+                        target_version=target_version,
+                        release_url=rel.release_url,
+                        message="Failed to transfer update lock ownership to installer (Fail-Closed). Child installer terminated.",
+                        error="Atomic lock transfer failed.",
+                    )
+                else:
+                    retain_lock_on_failure = True
+                    return UpdateResult(
+                        state=UpdateState.FAILED,
+                        from_version=current_version,
+                        target_version=target_version,
+                        release_url=rel.release_url,
+                        message="Failed to transfer update lock ownership and unable to verify child installer termination. Retaining lock (Fail-Closed).",
+                        error="Atomic lock transfer failed and child process liveness unconfirmed.",
+                    )
 
             installer_launched = True
 
@@ -542,5 +569,5 @@ class UpdateEngine:
                 ),
             )
         finally:
-            if not installer_launched:
+            if not installer_launched and not retain_lock_on_failure:
                 self.release_update_lock()

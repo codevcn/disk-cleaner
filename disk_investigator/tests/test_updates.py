@@ -758,6 +758,98 @@ class TestUpdateSubsystem(unittest.TestCase):
         self.assertTrue(second_engine.acquire_update_lock(), "Lock must be acquirable after installer releases it")
         second_engine.release_update_lock()
 
+    # --- Gate 35: Lock Transfer Failure And Child Terminate Failure Keeps Lock (Fail-Closed) ---
+    @patch("subprocess.Popen")
+    @patch("subprocess.run")
+    def test_lock_transfer_failure_and_child_terminate_failure_keeps_lock(self, mock_sub_run, mock_popen):
+        """UPDATE-FINAL-35: If lock transfer fails and child installer cannot be confirmed dead, lock remains held (Fail-Closed)."""
+        mock_proc = MagicMock()
+        mock_proc.pid = 99991
+        mock_proc.terminate.side_effect = PermissionError("Access is denied")
+        mock_proc.kill.side_effect = PermissionError("Access is denied")
+        mock_proc.wait.side_effect = subprocess.TimeoutExpired(cmd="setup", timeout=5.0)
+        mock_popen.return_value = mock_proc
+
+        mock_ver_res = MagicMock()
+        mock_ver_res.returncode = 0
+        mock_ver_res.stdout = "disk-investigator-setup 2.4.3"
+        mock_ver_res.stderr = ""
+        mock_sub_run.return_value = mock_ver_res
+
+        mock_client = MagicMock()
+        mock_client.get_latest_release.return_value = ReleaseInfo(
+            tag="v2.4.3",
+            version="2.4.3",
+            release_url="https://github.com/codevcn/disk-cleaner/releases/tag/v2.4.3",
+            published_at="",
+            release_name="",
+            assets={
+                "disk-investigator-setup.exe": ReleaseAsset("disk-investigator-setup.exe", "http://example.com/setup.exe"),
+                "SHA256SUMS.txt": ReleaseAsset("SHA256SUMS.txt", "http://example.com/sums.txt"),
+            },
+        )
+        test_bytes = b"VALID_EXE_PAYLOAD_FOR_TESTING"
+        import hashlib
+        valid_sha = hashlib.sha256(test_bytes).hexdigest()
+        mock_client.download_text.return_value = f"{valid_sha}  disk-investigator-setup.exe\n"
+
+        def fake_download_file(url, destination_path, **kwargs):
+            destination_path.write_bytes(test_bytes)
+
+        mock_client.download_file.side_effect = fake_download_file
+
+        with patch.object(self.engine, "transfer_update_lock_to_installer", return_value=False):
+            with patch("disk_investigator.updates.update_engine.check_pid_state", return_value=PidWaitState.RUNNING):
+                res = self.engine.execute_update(current_version="2.3.2", yes=True, release_client=mock_client)
+                self.assertEqual(res.state, UpdateState.FAILED)
+                self.assertIn("unable to verify child installer termination", res.message)
+                self.assertTrue(self.engine.update_lock_file.exists(), "Lock must NOT be released if child process state is unconfirmed (Fail-Closed)")
+
+    # --- Gate 36: Lock Transfer Failure Waits Until Child Exit Before Releasing Lock ---
+    @patch("subprocess.Popen")
+    @patch("subprocess.run")
+    def test_lock_transfer_failure_waits_until_child_exit_before_releasing_lock(self, mock_sub_run, mock_popen):
+        """UPDATE-FINAL-36: If lock transfer fails, installer is terminated and waited on before lock is released."""
+        mock_proc = MagicMock()
+        mock_proc.pid = 99992
+        mock_proc.wait.return_value = 0
+        mock_popen.return_value = mock_proc
+
+        mock_ver_res = MagicMock()
+        mock_ver_res.returncode = 0
+        mock_ver_res.stdout = "disk-investigator-setup 2.4.3"
+        mock_ver_res.stderr = ""
+        mock_sub_run.return_value = mock_ver_res
+
+        mock_client = MagicMock()
+        mock_client.get_latest_release.return_value = ReleaseInfo(
+            tag="v2.4.3",
+            version="2.4.3",
+            release_url="https://github.com/codevcn/disk-cleaner/releases/tag/v2.4.3",
+            published_at="",
+            release_name="",
+            assets={
+                "disk-investigator-setup.exe": ReleaseAsset("disk-investigator-setup.exe", "http://example.com/setup.exe"),
+                "SHA256SUMS.txt": ReleaseAsset("SHA256SUMS.txt", "http://example.com/sums.txt"),
+            },
+        )
+        test_bytes = b"VALID_EXE_PAYLOAD_FOR_TESTING"
+        import hashlib
+        valid_sha = hashlib.sha256(test_bytes).hexdigest()
+        mock_client.download_text.return_value = f"{valid_sha}  disk-investigator-setup.exe\n"
+
+        def fake_download_file(url, destination_path, **kwargs):
+            destination_path.write_bytes(test_bytes)
+
+        mock_client.download_file.side_effect = fake_download_file
+
+        with patch.object(self.engine, "transfer_update_lock_to_installer", return_value=False):
+            res = self.engine.execute_update(current_version="2.3.2", yes=True, release_client=mock_client)
+            self.assertEqual(res.state, UpdateState.FAILED)
+            mock_proc.terminate.assert_called_once()
+            mock_proc.wait.assert_called_with(timeout=5.0)
+            self.assertFalse(self.engine.update_lock_file.exists(), "Lock must be cleanly released after child process confirmed exited")
+
 
 if __name__ == "__main__":
     unittest.main()

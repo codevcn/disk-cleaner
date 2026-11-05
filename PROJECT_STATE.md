@@ -107,5 +107,18 @@
   - Added `test_packaged_e2e` step to GitHub Actions CI workflow (`.github/workflows/ci.yml`).
   - Test suite expanded to 182 tests (182/182 passed, 100% green).
 
-## 7. Current Status
-- **Status**: V2.4.2 Production Release. Fully hardened across 182 unit, lifecycle, invariant, and packaged E2E tests.
+## 7. Completed Milestones (V2.4.3 Verified Child Process Termination & True Packaged CLI E2E)
+- [x] Verified Child Installer Termination On Transfer Failure (P0-1):
+  - In `UpdateEngine.execute_update()`, if `transfer_update_lock_to_installer` returns `False`, child installer is terminated (`proc.terminate()`), waited upon (`proc.wait(timeout=5.0)` or `proc.kill()`), and verified via `check_pid_state == EXITED`.
+  - Only when child process is confirmed dead is staging lock released.
+  - If child process state cannot be confirmed dead (e.g. timeout or access denied), staging lock is RETAINED (`retain_lock_on_failure = True`) failing closed.
+  - Added Gates 35 & 36 in `test_updates.py`:
+    * Gate 35: `test_lock_transfer_failure_and_child_terminate_failure_keeps_lock`
+    * Gate 36: `test_lock_transfer_failure_waits_until_child_exit_before_releasing_lock`
+- [x] True Packaged Updater CLI E2E Verification (P0-2):
+  - Updated `test_packaged_e2e.py` to directly execute the compiled standalone single-file binary `disk_investigator.exe update --yes`.
+  - Verified `disk_investigator.exe` bundles the `disk_investigator.updates` subsystem cleanly, honors dynamic environment overrides, and successfully hands off execution to `disk-investigator-setup.exe`.
+  - Test suite expanded to 184 tests (184/184 passed, 100% green).
+
+## 8. Current Status
+- **Status**: V2.4.3 Production Release. Fully hardened across 184 unit, lifecycle, invariant, and packaged E2E tests.
