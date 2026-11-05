@@ -27,6 +27,12 @@ class CacheFreshness(str, Enum):
     EXPIRED = "expired"  # > 7 days or missing/corrupt
 
 
+class PidWaitState(str, Enum):
+    EXITED = "exited"
+    RUNNING = "running"
+    UNKNOWN = "unknown"
+
+
 def parse_semver(ver_str: str) -> Tuple[int, ...]:
     """Extracts numeric semver tuple from string like 'v2.0.3' -> (2, 0, 3)."""
     cleaned = re.sub(r"^[^\d]*", "", str(ver_str).strip())

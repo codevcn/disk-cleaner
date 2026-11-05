@@ -59,6 +59,10 @@ jobs:
         run: |
           python build_uninstaller.py
 
+      - name: Run Packaged E2E Self-Update & Rollback Tests
+        run: |
+          python -m unittest disk_investigator.tests.test_packaged_e2e -v
+
       - name: Verify Executable Functionality & Smoke Tests
         run: |
           .\disk_investigator.exe --version

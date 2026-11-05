@@ -665,6 +665,99 @@ class TestUpdateSubsystem(unittest.TestCase):
         self.assertEqual(receipt["from_version"], "2.3.2")
         self.assertEqual(receipt["to_version"], "2.4.1")
 
+    # --- Gate 31: Update Lock Transfer Fail-Closed Invariant ---
+    @patch("subprocess.Popen")
+    @patch("subprocess.run")
+    def test_lock_transfer_failure_never_reports_handoff_started(self, mock_sub_run, mock_popen):
+        """UPDATE-FINAL-31: If atomic lock transfer to installer fails, aborts child and returns FAILED."""
+        mock_proc = MagicMock()
+        mock_proc.pid = 98765
+        mock_popen.return_value = mock_proc
+
+        mock_ver_res = MagicMock()
+        mock_ver_res.returncode = 0
+        mock_ver_res.stdout = "disk-investigator-setup 2.4.2"
+        mock_ver_res.stderr = ""
+        mock_sub_run.return_value = mock_ver_res
+
+        mock_client = MagicMock()
+        mock_client.get_latest_release.return_value = ReleaseInfo(
+            tag="v2.4.2",
+            version="2.4.2",
+            release_url="https://github.com/codevcn/disk-cleaner/releases/tag/v2.4.2",
+            published_at="",
+            release_name="",
+            assets={
+                "disk-investigator-setup.exe": ReleaseAsset("disk-investigator-setup.exe", "http://example.com/setup.exe"),
+                "SHA256SUMS.txt": ReleaseAsset("SHA256SUMS.txt", "http://example.com/sums.txt"),
+            },
+        )
+        test_bytes = b"VALID_EXE_PAYLOAD_FOR_TESTING"
+        import hashlib
+        valid_sha = hashlib.sha256(test_bytes).hexdigest()
+        mock_client.download_text.return_value = f"{valid_sha}  disk-investigator-setup.exe\n"
+
+        def fake_download_file(url, destination_path, **kwargs):
+            destination_path.write_bytes(test_bytes)
+
+        mock_client.download_file.side_effect = fake_download_file
+
+        with patch.object(self.engine, "transfer_update_lock_to_installer", return_value=False):
+            res = self.engine.execute_update(current_version="2.3.2", yes=True, release_client=mock_client)
+            self.assertEqual(res.state, UpdateState.FAILED)
+            self.assertIn("Failed to transfer update lock ownership", res.message)
+            mock_proc.terminate.assert_called_once()
+            self.assertFalse(self.engine.update_lock_file.exists(), "Staging lock must be released on abort")
+
+    # --- Gate 32: Lock Owner Access Denied is Not Treated as Dead ---
+    def test_lock_owner_access_denied_is_not_treated_as_dead(self):
+        """UPDATE-FINAL-32: Unknown lock owner state (Access Denied) fails closed within active safety window."""
+        self.engine.update_lock_file.parent.mkdir(parents=True, exist_ok=True)
+        self.engine.update_lock_file.write_text(json.dumps({
+            "owner_pid": 55555,
+            "phase": "staging",
+            "time": time.time() - 30,  # 30 seconds ago
+        }), encoding="utf-8")
+
+        with patch("disk_investigator.updates.update_engine.check_pid_state", return_value=PidWaitState.UNKNOWN):
+            acquired = self.engine.acquire_update_lock()
+            self.assertFalse(acquired, "Must not steal lock when owner state is UNKNOWN within safety window")
+
+    # --- Gate 33: Live Installer Lock Not Recovered Only Due to Age ---
+    def test_live_installer_lock_not_recovered_only_due_to_age(self):
+        """UPDATE-FINAL-33: Actively running installer PID holds lock indefinitely even if age > 10m."""
+        self.engine.update_lock_file.parent.mkdir(parents=True, exist_ok=True)
+        self.engine.update_lock_file.write_text(json.dumps({
+            "owner_pid": 77777,
+            "phase": "installer",
+            "time": time.time() - 1200,  # 20 minutes ago (> 10m timeout)
+        }), encoding="utf-8")
+
+        with patch("disk_investigator.updates.update_engine.check_pid_state", return_value=PidWaitState.RUNNING):
+            acquired = self.engine.acquire_update_lock()
+            self.assertFalse(acquired, "Live installer must NEVER lose its lock solely due to age")
+
+    # --- Gate 34: Second Update Blocked After Handoff Until Finalizer ---
+    def test_second_update_blocked_after_handoff_until_installer_finally(self):
+        """UPDATE-FINAL-34: Second update process is rejected after handoff until installer releases lock."""
+        # Step 1: First update acquires lock
+        self.assertTrue(self.engine.acquire_update_lock())
+
+        # Step 2: Handoff transfers lock to installer PID 88888
+        self.assertTrue(self.engine.transfer_update_lock_to_installer(installer_pid=88888, target_version="2.4.2"))
+
+        # Step 3: While installer is RUNNING, second update process tries to acquire lock
+        second_engine = UpdateEngine(self.cache_mgr)
+        with patch("disk_investigator.updates.update_engine.check_pid_state", return_value=PidWaitState.RUNNING):
+            self.assertFalse(second_engine.acquire_update_lock(), "Second process must be blocked during installer execution")
+
+        # Step 4: Installer completes and calls release_update_lock() in finally
+        self.engine.release_update_lock()
+
+        # Step 5: Now second update process can acquire lock
+        self.assertTrue(second_engine.acquire_update_lock(), "Lock must be acquirable after installer releases it")
+        second_engine.release_update_lock()
+
 
 if __name__ == "__main__":
     unittest.main()

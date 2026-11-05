@@ -19,7 +19,7 @@ from typing import Any, Callable, Dict, Optional, Tuple
 from .background_refresh import BackgroundRefreshManager
 from .cache import UpdateCacheManager, is_kill_switch_active
 from .checksum import parse_sha256sums_manifest, verify_sha256_checksum
-from .models import CacheFreshness, ReleaseInfo, UpdateCache, UpdateResult, UpdateState, parse_semver
+from .models import CacheFreshness, PidWaitState, ReleaseInfo, UpdateCache, UpdateResult, UpdateState, parse_semver
 from .release_client import GitHubReleaseClient
 
 UPDATE_LOCK_TIMEOUT_SECONDS = 600.0  # 10 minutes stale update lock recovery
@@ -29,10 +29,14 @@ STRICT_TAG_PATTERN = re.compile(r"^v(\d+\.\d+\.\d+)$")
 SETUP_VERSION_OUTPUT_PATTERN = re.compile(r"^disk-investigator-setup\s+(\d+\.\d+\.\d+)$")
 
 
-def is_pid_alive(pid: int) -> bool:
-    """Checks if a process with specified PID is currently active."""
+def check_pid_state(pid: int) -> PidWaitState:
+    """
+    Checks if a PID is alive, exited, or in an unknown/inaccessible state.
+    Returns PidWaitState.EXITED, RUNNING, or UNKNOWN (Fail-Closed).
+    """
     if pid <= 0:
-        return False
+        return PidWaitState.EXITED
+
     if sys.platform == "win32":
         import ctypes
         from ctypes import wintypes
@@ -40,21 +44,30 @@ def is_pid_alive(pid: int) -> bool:
         PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
         handle = ctypes.windll.kernel32.OpenProcess(SYNCHRONIZE | PROCESS_QUERY_LIMITED_INFORMATION, False, pid)
         if not handle:
-            return False
+            err = ctypes.GetLastError()
+            # ERROR_INVALID_PARAMETER (87): PID does not exist -> EXITED
+            if err == 87:
+                return PidWaitState.EXITED
+            # If Access Denied (5) or any other API error, fail-closed -> UNKNOWN
+            return PidWaitState.UNKNOWN
         try:
             exit_code = wintypes.DWORD()
             if ctypes.windll.kernel32.GetExitCodeProcess(handle, ctypes.byref(exit_code)):
                 STILL_ACTIVE = 259
-                return exit_code.value == STILL_ACTIVE
-            return False
+                if exit_code.value != STILL_ACTIVE:
+                    return PidWaitState.EXITED
+                return PidWaitState.RUNNING
+            return PidWaitState.UNKNOWN
         finally:
             ctypes.windll.kernel32.CloseHandle(handle)
     else:
         try:
             os.kill(pid, 0)
-            return True
-        except OSError:
-            return False
+            return PidWaitState.RUNNING
+        except ProcessLookupError:
+            return PidWaitState.EXITED
+        except (PermissionError, OSError):
+            return PidWaitState.UNKNOWN
 
 
 class UpdateEngine:
@@ -69,6 +82,10 @@ class UpdateEngine:
         """
         Acquires atomic lock for staging updates.
         Validates PID liveness of existing lock owner and recovers stale locks.
+        Enforces tri-state safety:
+          - RUNNING: lock is actively held, NEVER recover regardless of age.
+          - UNKNOWN: fail-closed within active safety window (<10m).
+          - EXITED: safe to recover lock immediately.
         """
         try:
             self.cache_mgr.updates_dir.mkdir(parents=True, exist_ok=True)
@@ -77,17 +94,32 @@ class UpdateEngine:
                 try:
                     lock_data = json.loads(self.update_lock_file.read_text(encoding="utf-8"))
                     owner_pid = lock_data.get("owner_pid")
-                    lock_time = lock_data.get("time", 0.0)
-                    if owner_pid and is_pid_alive(owner_pid) and (now - lock_time < UPDATE_LOCK_TIMEOUT_SECONDS):
-                        return False  # Still actively running by living owner process
-                    self.update_lock_file.unlink(missing_ok=True)
+                    lock_time = float(lock_data.get("time", 0.0))
+
+                    if owner_pid:
+                        pid_state = check_pid_state(owner_pid)
+                        if pid_state == PidWaitState.RUNNING:
+                            # Living owner actively running: NEVER expire solely due to age!
+                            return False
+                        elif pid_state == PidWaitState.UNKNOWN:
+                            # Fail-closed within active safety window
+                            if now - lock_time < UPDATE_LOCK_TIMEOUT_SECONDS:
+                                return False
+                            self.update_lock_file.unlink(missing_ok=True)
+                        elif pid_state == PidWaitState.EXITED:
+                            # Owner is dead -> safely recover lock
+                            self.update_lock_file.unlink(missing_ok=True)
+                    else:
+                        if now - lock_time < UPDATE_LOCK_TIMEOUT_SECONDS:
+                            return False
+                        self.update_lock_file.unlink(missing_ok=True)
                 except Exception:
                     try:
                         if now - self.update_lock_file.stat().st_mtime < UPDATE_LOCK_TIMEOUT_SECONDS:
                             return False
                         self.update_lock_file.unlink(missing_ok=True)
                     except Exception:
-                        pass
+                        return False
 
             flags = os.O_CREAT | os.O_EXCL | os.O_WRONLY
             fd = os.open(str(self.update_lock_file), flags)
@@ -98,7 +130,7 @@ class UpdateEngine:
                         "phase": "staging",
                         "time": now,
                     }
-                    json.dump(data, f)
+                    json.dump(data, f, indent=2)
                 return True
             except Exception:
                 return False
@@ -107,11 +139,14 @@ class UpdateEngine:
         except Exception:
             return False
 
-    def transfer_update_lock_to_installer(self, installer_pid: int, target_version: str) -> None:
+    def transfer_update_lock_to_installer(self, installer_pid: int, target_version: str) -> bool:
         """
         Transfers lock ownership to the newly spawned detached installer.
         Ensures update.lock persists throughout installer execution until installer finishes.
+        Returns True on success, False on any failure (Fail-Closed).
         """
+        if installer_pid <= 0:
+            return False
         try:
             lock_data = {
                 "owner_pid": installer_pid,
@@ -122,8 +157,9 @@ class UpdateEngine:
             tmp = self.update_lock_file.with_suffix(f".tmp_lock_{os.getpid()}")
             tmp.write_text(json.dumps(lock_data, indent=2), encoding="utf-8")
             os.replace(str(tmp), str(self.update_lock_file))
+            return True
         except Exception:
-            pass
+            return False
 
     def release_update_lock(self) -> None:
         """Releases staging update lock."""
@@ -458,9 +494,24 @@ class UpdateEngine:
                     error=str(e),
                 )
 
-            # Mark installer launched and transfer update.lock ownership to installer PID
+            # Transfer update.lock ownership to installer PID (Fail-Closed)
+            transfer_ok = self.transfer_update_lock_to_installer(installer_pid=proc.pid, target_version=target_version)
+            if not transfer_ok:
+                try:
+                    proc.terminate()
+                except Exception:
+                    pass
+                self.release_update_lock()
+                return UpdateResult(
+                    state=UpdateState.FAILED,
+                    from_version=current_version,
+                    target_version=target_version,
+                    release_url=rel.release_url,
+                    message="Failed to transfer update lock ownership to installer (Fail-Closed).",
+                    error="Atomic lock transfer failed.",
+                )
+
             installer_launched = True
-            self.transfer_update_lock_to_installer(installer_pid=proc.pid, target_version=target_version)
 
             # 7. Update cache to record new version checked
             self.cache_mgr.write_cache(

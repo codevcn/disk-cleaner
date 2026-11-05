@@ -92,5 +92,20 @@
   - Verified atomic rollback preserving prior version on installer failures.
   - Test suite expanded to 176 tests (176/176 passed, 100% green).
 
-## 6. Current Status
-- **Status**: V2.4.1 Production Hardened Release. Fully verified across 176 unit, lifecycle, invariant, and destructive tests. Ready for CI build and publication.
+## 6. Completed Milestones (V2.4.2 Fail-Closed Lock Transfer, Tri-State Lock Liveness & Hermetic Packaged E2E)
+- [x] Fail-Closed Lock Transfer:
+  - `transfer_update_lock_to_installer()` returns boolean status, never silently swallowing errors.
+  - Caller aborts child installer (`proc.terminate()`), releases staging lock, and transitions to `UpdateState.FAILED` if transfer fails.
+- [x] Tri-State Lock Owner Liveness (`RUNNING`, `EXITED`, `UNKNOWN`):
+  - `RUNNING`: Lock strictly maintained, never treated as stale even if age exceeds 10 minutes.
+  - `EXITED`: Lock safely cleared immediately upon process termination.
+  - `UNKNOWN` (e.g. `ERROR_ACCESS_DENIED`): Fail-closed, preserved during active 10-minute safety window.
+  - Added Gates 31-34 unit tests in `test_updates.py`.
+- [x] Hermetic Packaged E2E Self-Update & Rollback (`test_packaged_e2e.py`):
+  - Gate 29: True Packaged E2E Self-Update verified with compiled binary `disk-investigator-setup.exe` against local HTTP mock release server (`127.0.0.1:0`).
+  - Gate 30: True Packaged E2E Rollback verified under induced failure, guaranteeing previous binary intact and receipt updated.
+  - Added `test_packaged_e2e` step to GitHub Actions CI workflow (`.github/workflows/ci.yml`).
+  - Test suite expanded to 182 tests (182/182 passed, 100% green).
+
+## 7. Current Status
+- **Status**: V2.4.2 Production Release. Fully hardened across 182 unit, lifecycle, invariant, and packaged E2E tests.

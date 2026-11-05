@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import sys
 from typing import Any, Dict, List, Optional
 
@@ -371,7 +372,8 @@ def main(args: Optional[List[str]] = None) -> int:
                 return 0
 
             engine = UpdateEngine(cache_mgr)
-            update_res = engine.execute_update(current_version=__version__, yes=parsed.yes)
+            current_ver = os.environ.get("DISK_INVESTIGATOR_CURRENT_VERSION_OVERRIDE", __version__)
+            update_res = engine.execute_update(current_version=current_ver, yes=parsed.yes)
             is_ok = update_res.state in (UpdateState.UP_TO_DATE, UpdateState.HANDOFF_STARTED)
             _json_output({
                 "status": "success" if is_ok else "failed",

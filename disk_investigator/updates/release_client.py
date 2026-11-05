@@ -45,7 +45,8 @@ class GitHubReleaseClient:
         Fetches the latest official release from GitHub Releases API.
         Fails safely on network or HTTP errors.
         """
-        api_url = f"https://api.github.com/repos/{self.repo}/releases/latest"
+        base_url = os.environ.get("DISK_INVESTIGATOR_API_BASE_URL", "https://api.github.com").rstrip("/")
+        api_url = f"{base_url}/repos/{self.repo}/releases/latest"
         req = urllib.request.Request(
             api_url,
             headers={
