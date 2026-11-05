@@ -21,17 +21,22 @@ $$\text{Capabilities} \longrightarrow \text{Investigation} \longrightarrow \text
 1. [Architectural Overview](#architectural-overview)
 2. [Multi-Domain Coverage](#multi-domain-coverage)
 3. [Safety Invariants & Threat Model](#safety-invariants--threat-model)
-4. [Complete CLI Command Reference](#complete-cli-command-reference)
-   - [`discover-capabilities`](#1-discover-capabilities---non-invasive-ecosystem-probes)
-   - [`investigate`](#2-investigate---full-storage-investigation)
-   - [`cleanup-plan`](#3-cleanup-plan---cryptographically-signed-plan-schema-v2)
-   - [`execute-plan`](#4-execute-plan---two-phase-safe-execution)
-   - [`doctor`](#5-doctor---environment--runtime-capabilities)
-   - [`overview`](#6-overview---high-level-drive-analysis-50ms)
-   - [`scan`](#7-scan---recursive-filesystem-scanning)
-   - [`drilldown`](#8-drilldown---targeted-forensic-drilldown)
-5. [AI Agent Integration (Google Antigravity Skill)](#ai-agent-integration-google-antigravity-skill)
-6. [Testing & Verification](#testing--verification)
+4. [Standalone Executable Packaging](#standalone-executable-packaging)
+5. [Autonomous In-App Self-Update & Non-Blocking SWR Engine](#autonomous-in-app-self-update--non-blocking-swr-engine)
+6. [Complete CLI Command Reference](#complete-cli-command-reference)
+   - [`doctor`](#1-doctor---environment--runtime-capabilities)
+   - [`overview`](#2-overview---high-level-drive-analysis--50ms)
+   - [`scan`](#3-scan---recursive-filesystem-scanning)
+   - [`drilldown`](#4-drilldown---targeted-forensic-drilldown)
+   - [`detect-dev`](#5-detect-dev---developer-artifacts--stale-caches)
+   - [`detect-docker`](#6-detect-docker---wsl2-vhdx--docker-storage)
+   - [`detect-large`](#7-detect-large---large-files-discovery)
+   - [`cleanup-plan`](#8-cleanup-plan---cryptographically-signed-plan-generation)
+   - [`execute-plan`](#9-execute-plan---two-phase-safe-execution)
+   - [`check-update`](#10-check-update---github-release-inspection)
+   - [`update`](#11-update---autonomous-in-app-self-update)
+7. [AI Agent Integration (Google Antigravity Skill)](#ai-agent-integration-google-antigravity-skill)
+8. [Testing & Verification](#testing--verification)
 
 ---
 
@@ -252,62 +257,66 @@ Example `build_history.json`:
 
 ---
 
-## Autonomous GitHub Update Workflow
+## Autonomous In-App Self-Update & Non-Blocking SWR Engine
 
-Disk Investigator includes an end-to-end update system linked to the official repository: **[`codevcn/disk-cleaner`](https://github.com/codevcn/disk-cleaner)**.
+Disk Investigator features a high-performance, resilient update system linked to the official repository: **[`codevcn/disk-cleaner`](https://github.com/codevcn/disk-cleaner)**. It is specifically engineered to operate seamlessly with AI agents and unattended automation.
 
-### Automated Version Checking on Each Run
-- Every time `disk_investigator` runs (e.g. `doctor`, `overview`, `scan`), it checks the local cache (`.investigation_cache/update_status.json`, 1-hour TTL) or queries the GitHub Releases API.
-- If a newer version is published on GitHub:
-  - An unobtrusive banner is printed to `stderr` (preserving `stdout` JSON integrity for agents).
-  - The `doctor` command output includes the full `"update_check"` status.
+### 1. Zero-Latency Non-Blocking Version Checking (SWR Engine)
+- **Zero Latency on Foreground Commands**: Every routine execution (`doctor`, `overview`, `scan`, `investigate`, `cleanup-plan`, etc.) reads local cache at `%LOCALAPPDATA%\DiskInvestigator\updates\update_check.json` (24-hour TTL) without issuing synchronous network calls (0ms overhead).
+- **Background Detached Worker**: If the cache is missing or older than 24 hours, the CLI automatically spawns a detached background child process (`disk_investigator _refresh-update-cache`). The foreground command proceeds instantly while the background process queries GitHub Releases and updates the cache atomically.
+- **`stdout` Purity Guarantee**: If a newer version is detected, notice messages are printed **strictly to `stderr`**:
+  ```text
+  [disk_investigator] Notice: A new version is available: v2.4.4 (current: v2.4.3).
+  [disk_investigator] Run 'disk_investigator update --yes' or visit https://github.com/codevcn/disk-cleaner/releases/tag/v2.4.4
+  ```
+  This preserves 100% JSON structure purity on `stdout`, completely preventing JSON parse crashes in AI agents.
+- **Offline-First & Kill-Switch**: If there is no internet connection or GitHub is unreachable, the check silently continues without failing or displaying error messages. To completely disable version checks (e.g. in air-gapped or CI environments), set:
+  ```cmd
+  set DISK_INVESTIGATOR_NO_UPDATE_CHECK=1
+  ```
 
-### One-Click Agent Update (`update_from_github.py` / `update.cmd`)
-When an update is detected, the user simply asks the AI Agent:
-> *"Có bản cập nhật mới trên GitHub, hãy cập nhật giúp tôi."*
-
-The Agent executes `python update_from_github.py` (or `update.cmd`), which autonomously executes the full lifecycle:
-1. **GitHub Pull**: Fetches and pulls latest commits from `origin/main`.
-2. **Automated Verification**: Runs full test suite (120+ tests: `python -m unittest discover -s disk_investigator/tests`) to ensure 100% test integrity.
-3. **Executable Recompilation**: Invokes `build_exe.py` to regenerate the standalone binary `disk_investigator.exe` in the root folder, incrementing `build_history.json`.
-4. **Antigravity Skill Sync**: Synchronizes the updated `SKILL.md` to `~/.gemini/config/skills/disk-cleanup/SKILL.md`.
-5. **Cache Refresh**: Invalidates update check cache.
+### 2. Autonomous In-App Self-Update (`disk_investigator update --yes`)
+When an update is detected, AI agents or users can perform a complete, transactional binary upgrade with a single command without needing Python, Git, or a web browser:
 
 ```bash
-# Check update status manually
-python update_from_github.py --check
-# or
-update.cmd --check
+# Autonomously upgrade to the latest official release (unattended)
+disk_investigator update --yes
 
-# Execute full autonomous update
-python update_from_github.py
-# or
-update.cmd
+# Check status and audit trail of previous updates
+disk_investigator update --status
 ```
+
+**Self-Update Lifecycle & Safety Architecture:**
+1. **Official Release Resolution**: Queries GitHub Releases API for the latest immutable tag and asset manifest.
+2. **Cryptographic Verification (SHA-256)**: Downloads candidate binary (`disk_investigator.exe` or `disk-investigator-setup.exe`) and `SHA256SUMS.txt` into an isolated staging directory (`%LOCALAPPDATA%\DiskInvestigator\updates\staged\`). Verifies the SHA-256 cryptographic hash before any execution.
+3. **Single-Owner PID Concurrency Guard**: Enforces an exclusive file lock (`update.lock`) with cross-process PID inheritance (parent bootloader & child worker) to eliminate update races.
+4. **Atomic Handoff & Rollback Defense**: The running binary stages replacement via transactional file swap with automatic `.bak` backup creation. If binary substitution encounters any error, an immediate rollback restores the previous working version.
+5. **Environment & Skill Sync**: Updates the User Registry `PATH` (if needed) and synchronizes the Google Antigravity Skill (`%USERPROFILE%\.gemini\config\skills\disk-cleanup\SKILL.md`).
+6. **Audit Receipt**: Writes full transaction metadata to `%LOCALAPPDATA%\DiskInvestigator\updates\receipt.json`.
 
 ### One-Click Remote Publishing (`publish.cmd` / `publish_release.py`)
 
 When you finish implementing a new feature or bugfix, publish a new release to GitHub with 1 command:
 
 ```cmd
-# Publish patch update (e.g. v2.2.1 -> v2.2.2)
+# Publish patch update (e.g. v2.4.3 -> v2.4.4)
 publish.cmd --bump-patch "fix: improve path resolution"
 
-# Publish minor update (e.g. v2.2.1 -> v2.3.0)
+# Publish minor update (e.g. v2.4.0 -> v2.5.0)
 publish.cmd --bump-minor "feat: add specialized cache cleaner"
 
 # Publish specific version
-publish.cmd --version 2.2.2 "release v2.2.2"
+publish.cmd --version 2.4.4 "release v2.4.4"
 
 # Dry-run simulation (without committing or pushing)
 publish.cmd --bump-patch --dry-run "test release pipeline"
 ```
 
 `publish.cmd` executes the complete publishing pipeline:
-1. **Automated Quality Gate**: Runs all automated tests (120+ tests: `python -m unittest discover -s disk_investigator/tests`). Aborts immediately if any test fails to guarantee production stability.
+1. **Automated Quality Gate**: Runs all automated tests (187 tests: `python -m unittest discover -s disk_investigator/tests`). Aborts immediately if any test fails to guarantee production stability.
 2. **Binary Packaging**: Calls `build_exe.py` to compile `disk_investigator.exe` and update `build_history.json`.
 3. **Git Commit & Push**: Stages all modified files, commits with release title, and pushes to `origin/main`.
-4. **GitHub Release & Asset Upload**: Creates tag `vX.Y.Z` and uploads `disk_investigator.exe` to GitHub Releases via `gh release create`.
+4. **GitHub Release & Asset Upload**: Creates tag `vX.Y.Z` and uploads `disk_investigator.exe`, `disk-investigator-setup.exe`, `disk-investigator-uninstall.exe`, and `SHA256SUMS.txt` to GitHub Releases via `gh release create`.
 
 ---
 
@@ -515,13 +524,69 @@ disk_investigator.exe execute-plan plan_9f81a7b4 --items 1,2 --apply
 
 ### 10. `check-update` - GitHub Release Inspection
 
-Queries GitHub to check if a newer version of the tool is available.
+Queries GitHub Releases (or inspects the local 24-hour cache) to report version availability.
 
 ```bash
+# Check update status using local 24-hour cache
 disk_investigator.exe check-update
 
-# Force query bypassing the 1-hour cache
+# Force query bypassing the 24-hour cache
 disk_investigator.exe check-update --force
+
+# JSON envelope output for AI Agent integration
+disk_investigator.exe check-update --force --json
+```
+
+**JSON Output Structure:**
+```json
+{
+  "status": "success",
+  "update_info": {
+    "current_version": "2.4.4",
+    "latest_version": "2.4.4",
+    "update_available": false,
+    "release_url": "https://github.com/codevcn/disk-cleaner/releases/tag/v2.4.4",
+    "published_at": "2026-11-05T04:00:00Z",
+    "cached": true
+  }
+}
+```
+
+---
+
+### 11. `update` - Autonomous In-App Self-Update
+
+Autonomously downloads, cryptographically verifies, and installs the latest official release directly from GitHub Releases without opening a browser or cloning source code.
+
+- **Non-Interactive Upgrade**: Pass `--yes` (or `-y`) to skip interactive confirmation prompts (ideal for automated AI agents).
+- **Audit Receipt**: Pass `--status` to inspect the last update receipt without making changes.
+- **Fail-Closed Safety**: Enforces PID-aware file locking, SHA-256 integrity verification, and atomic swap with automatic `.bak` rollback on error.
+
+```bash
+# Check status of previous update
+disk_investigator.exe update --status
+
+# Autonomously upgrade to the latest official release
+disk_investigator.exe update --yes
+
+# Agent JSON envelope
+disk_investigator.exe update --yes --json
+```
+
+**JSON Output Structure:**
+```json
+{
+  "status": "success",
+  "update": {
+    "state": "handoff_started",
+    "previous_version": "2.4.3",
+    "target_version": "2.4.4",
+    "asset_name": "disk_investigator.exe",
+    "staged_path": "C:\\Users\\dell\\AppData\\Local\\DiskInvestigator\\updates\\staged\\disk_investigator.exe",
+    "target_path": "C:\\Users\\dell\\AppData\\Local\\DiskInvestigator\\bin\\disk_investigator.exe",
+    "message": "Update staged successfully. Handoff installer started."
+  }
+}
 ```
 
 ---
@@ -551,7 +616,7 @@ User: "Ổ D của tôi sắp đầy, hãy điều tra giúp tôi."
 
 ## Testing & Verification
 
-The test suite includes **120+ comprehensive unit, integration, and false-positive boundary tests** covering all 8 storage domains, capability discovery, TOCTOU drift detection, HMAC plan integrity, 8.3 alias defense, Recycle Bin operations, and typed action registry:
+The test suite includes **187 comprehensive unit, integration, lifecycle, and packaged E2E tests (187/187 passed, 100% green)** covering all 8 storage domains, capability discovery, TOCTOU drift detection, HMAC plan integrity, 8.3 alias defense, Recycle Bin operations, typed action registry, non-blocking SWR update cache, and in-app self-update lifecycle:
 
 ```bash
 # Run full test suite using Python test runner
@@ -568,6 +633,7 @@ python -m unittest discover -s disk_investigator/tests -v
 - **`TestDetectors`**: Tests `DeveloperDetector` (stale `node_modules`, `.venv`), `DockerDetector`, and `LargeFilesDetector`.
 - **`TestPathPolicy`**: Tests NT canonicalization, critical boundary evaluation, and network share detection.
 - **`TestServices`**: Tests `ScanService` and `DrilldownService` snapshot lifecycle.
+- **`TestUpdateEngine` & `TestInstaller`**: Non-blocking SWR background worker, 24-hour cache TTL, PID concurrency lock, SHA-256 checksum verification, atomic swap & rollback, and packaged binary E2E self-update lifecycle.
 - **`TestDestructiveE2E`**: 20 rigorous safety tests:
   - Recycle Bin sibling preservation
   - TOCTOU size drift and mtime drift refusal
@@ -593,7 +659,7 @@ d:\D-Personal\disk-cleaner\
 ├── PROJECT_STATE.md          # Current project state & audit log
 │
 ├── disk_investigator/        # Core Python package
-│   ├── __init__.py           # Package version definition (v2.2.1)
+│   ├── __init__.py           # Package version definition (v2.4.4)
 │   ├── __main__.py           # Application entry point
 │   ├── cli.py                # Command-line interface & argument parser
 │   ├── capabilities.py       # Host environment & tool capability discovery
@@ -604,7 +670,7 @@ d:\D-Personal\disk-cleaner\
 │   ├── detectors/            # Multi-domain storage detectors (Browser, Office, Creator, etc.)
 │   ├── cleanup/              # Signed plan generator & safe executor
 │   ├── services/             # Scan & drill-down snapshot services
-│   └── tests/                # 120+ unit, integration & destructive E2E tests
+│   └── tests/                # 187 comprehensive unit, integration, lifecycle & E2E tests
 │
 └── skills/
     └── disk-cleanup/         # Antigravity AI Agent Skill definition
