@@ -211,7 +211,6 @@ build.cmd
 - **`build_exe.py`**: Compiles standalone CLI binary `disk_investigator.exe` and updates `build_history.json`.
 - **`build_installer.py`**: Packages `installer.py` embedding `disk_investigator.exe`, `SKILL.md`, and `README.md` into `disk-investigator-setup.exe`.
 - **`build_uninstaller.py`**: Packages `uninstaller.py` embedding `SKILL.md` into standalone `disk-investigator-uninstall.exe`.
-- **`publish.cmd` / `publish_release.py`**: Verifies quality gate tests, checks clean git tree, enforces immutable releases (hard abort if tag exists), and publishes all 3 binary assets + `SHA256SUMS.txt` to GitHub Releases.
 
 ### Single-Executable Invariant & Build History (`build_history.json`)
 
@@ -293,30 +292,6 @@ disk_investigator update --status
 4. **Atomic Handoff & Rollback Defense**: The running binary stages replacement via transactional file swap with automatic `.bak` backup creation. If binary substitution encounters any error, an immediate rollback restores the previous working version.
 5. **Environment & Skill Sync**: Updates the User Registry `PATH` (if needed) and synchronizes the Google Antigravity Skill (`%USERPROFILE%\.gemini\config\skills\disk-cleanup\SKILL.md`).
 6. **Audit Receipt**: Writes full transaction metadata to `%LOCALAPPDATA%\DiskInvestigator\updates\receipt.json`.
-
-### One-Click Remote Publishing (`publish.cmd` / `publish_release.py`)
-
-When you finish implementing a new feature or bugfix, publish a new release to GitHub with 1 command:
-
-```cmd
-# Publish patch update (e.g. v2.4.3 -> v2.4.4)
-publish.cmd --bump-patch "fix: improve path resolution"
-
-# Publish minor update (e.g. v2.4.0 -> v2.5.0)
-publish.cmd --bump-minor "feat: add specialized cache cleaner"
-
-# Publish specific version
-publish.cmd --version 2.4.4 "release v2.4.4"
-
-# Dry-run simulation (without committing or pushing)
-publish.cmd --bump-patch --dry-run "test release pipeline"
-```
-
-`publish.cmd` executes the complete publishing pipeline:
-1. **Automated Quality Gate**: Runs all automated tests (187 tests: `python -m unittest discover -s disk_investigator/tests`). Aborts immediately if any test fails to guarantee production stability.
-2. **Binary Packaging**: Calls `build_exe.py` to compile `disk_investigator.exe` and update `build_history.json`.
-3. **Git Commit & Push**: Stages all modified files, commits with release title, and pushes to `origin/main`.
-4. **GitHub Release & Asset Upload**: Creates tag `vX.Y.Z` and uploads `disk_investigator.exe`, `disk-investigator-setup.exe`, `disk-investigator-uninstall.exe`, and `SHA256SUMS.txt` to GitHub Releases via `gh release create`.
 
 ---
 

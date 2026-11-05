@@ -56,9 +56,9 @@
   - `installer.py` refactored to delegate uninstall operations directly to `UninstallEngine`.
   - `uninstall.cmd` updated to eliminate raw recursive destructive fallbacks (`rd /s /q`).
   - `build.cmd` updated to compile all 3 executables (`disk_investigator.exe`, `disk-investigator-setup.exe`, `disk-investigator-uninstall.exe`).
-  - `publish_release.py` updated to verify and package all 3 executables and `SHA256SUMS.txt`.
-  - `.github/workflows/ci.yml` updated to build, smoke test, and release all 3 executables.
-  - Full suite of 140 tests passing 100% green.
+  - `.github/workflows/ci.yml` updated to test and verify all 3 executables.
+  - Legacy publish scripts removed per user requirement (custom publish flow to be built later).
+  - Full test suite passing 100% green.
 
 ## 4. Completed Milestones (V2.4.0 In-App Self-Update & Non-Blocking SWR Engine)
 - [x] In-App Self-Update & Staged Lifecycle Handoff:
