@@ -160,14 +160,34 @@ def wait_for_pid_to_exit(pid: int, timeout_seconds: float = 30.0) -> PidWaitStat
     return PidWaitState.RUNNING
 
 
-def release_update_lock() -> None:
-    """Releases the updates/update.lock held during staged upgrade."""
+def release_update_lock(
+    expected_update_id: Optional[str] = None,
+    expected_owner_pid: Optional[int] = None,
+) -> None:
+    """Releases the updates/update.lock only if ownership matches expected update transaction."""
     try:
         local_app_data = os.environ.get("LOCALAPPDATA")
         if local_app_data:
             lock_file = Path(local_app_data) / "DiskInvestigator" / "updates" / "update.lock"
-            if lock_file.exists():
-                lock_file.unlink(missing_ok=True)
+            if not lock_file.exists():
+                return
+            if expected_update_id is not None or expected_owner_pid is not None:
+                try:
+                    data = json.loads(lock_file.read_text(encoding="utf-8"))
+                    if expected_update_id is not None and data.get("update_id") != expected_update_id:
+                        return
+                    if expected_owner_pid is not None:
+                        valid_pids = {expected_owner_pid, os.getpid()}
+                        if hasattr(os, "getppid"):
+                            try:
+                                valid_pids.add(os.getppid())
+                            except Exception:
+                                pass
+                        if data.get("owner_pid") not in valid_pids:
+                            return
+                except Exception:
+                    return
+            lock_file.unlink(missing_ok=True)
     except Exception:
         pass
 
@@ -305,6 +325,7 @@ def install(
     repair: bool = False,
     wait_for_pid: int = 0,
     update_result: Optional[Path] = None,
+    update_id: Optional[str] = None,
 ) -> bool:
     """
     Main 1-Click All-in-One installation procedure.
@@ -351,6 +372,56 @@ def install(
                 receipt_error = err_desc
                 return False
             print(f"[+] Tiến trình cha PID {wait_for_pid} đã kết thúc an toàn.")
+
+            # Validate lifecycle update.lock ownership and transaction identity (Fail-Closed)
+            local_app_data = os.environ.get("LOCALAPPDATA")
+            lock_file = Path(local_app_data) / "DiskInvestigator" / "updates" / "update.lock" if local_app_data else None
+            if not lock_file or not lock_file.exists():
+                err_desc = "Update lock does not exist prior to installer mutation (Fail-Closed)"
+                print(f"[ERROR] {err_desc}. HỦY CÀI ĐẶT.")
+                receipt_error = err_desc
+                return False
+
+            try:
+                lock_data = json.loads(lock_file.read_text(encoding="utf-8"))
+            except Exception as e:
+                err_desc = f"Corrupt update lock metadata: {e} (Fail-Closed)"
+                print(f"[ERROR] {err_desc}. HỦY CÀI ĐẶT.")
+                receipt_error = err_desc
+                return False
+
+            if lock_data.get("phase") != "installer":
+                err_desc = f"Update lock phase mismatch (expected 'installer', got '{lock_data.get('phase')}')"
+                print(f"[ERROR] {err_desc}. HỦY CÀI ĐẶT.")
+                receipt_error = err_desc
+                return False
+
+            valid_owner_pids = {os.getpid()}
+            if hasattr(os, "getppid"):
+                try:
+                    valid_owner_pids.add(os.getppid())
+                except Exception:
+                    pass
+
+            if lock_data.get("owner_pid") not in valid_owner_pids:
+                err_desc = f"Update lock owner PID mismatch (expected {os.getpid()}, got {lock_data.get('owner_pid')})"
+                print(f"[ERROR] {err_desc}. HỦY CÀI ĐẶT.")
+                receipt_error = err_desc
+                return False
+
+            if update_id and lock_data.get("update_id") != update_id:
+                err_desc = f"Update transaction ID mismatch (expected '{update_id}', got '{lock_data.get('update_id')}')"
+                print(f"[ERROR] {err_desc}. HỦY CÀI ĐẶT.")
+                receipt_error = err_desc
+                return False
+
+            if lock_data.get("target_version") and lock_data.get("target_version") != current_version:
+                err_desc = f"Update target version mismatch (expected '{current_version}', got '{lock_data.get('target_version')}')"
+                print(f"[ERROR] {err_desc}. HỦY CÀI ĐẶT.")
+                receipt_error = err_desc
+                return False
+
+            print("[+] Xác thực bản quyền update.lock thành công (Owner PID & Transaction ID verified).")
 
         print(f"Thư mục cài đặt:   {install_dir}")
         print(f"Đường dẫn binary:  {target_exe}")
@@ -663,7 +734,10 @@ def install(
             error_msg=receipt_error,
             rollback=receipt_rollback,
         )
-        release_update_lock()
+        release_update_lock(
+            expected_update_id=update_id,
+            expected_owner_pid=os.getpid() if wait_for_pid > 0 else None,
+        )
 
 
 def uninstall(silent: bool = False, purge_data: bool = False) -> bool:
@@ -723,6 +797,12 @@ def main() -> int:
         default=None,
         help="Optional path to write update result receipt JSON.",
     )
+    parser.add_argument(
+        "--update-id",
+        type=str,
+        default=None,
+        help="Expected update transaction ID matching update.lock metadata.",
+    )
 
     args = parser.parse_args()
 
@@ -742,6 +822,7 @@ def main() -> int:
             repair=args.repair,
             wait_for_pid=args.wait_for_pid,
             update_result=args.update_result,
+            update_id=args.update_id,
         )
         if interactive and not args.no_pause:
             try:

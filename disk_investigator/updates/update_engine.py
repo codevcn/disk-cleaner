@@ -13,6 +13,7 @@ import subprocess
 import sys
 import tempfile
 import time
+import uuid
 from pathlib import Path
 from typing import Any, Callable, Dict, Optional, Tuple
 
@@ -77,8 +78,9 @@ class UpdateEngine:
         self.cache_mgr = cache_manager or UpdateCacheManager()
         self.refresh_mgr = BackgroundRefreshManager(self.cache_mgr)
         self.update_lock_file = self.cache_mgr.updates_dir / "update.lock"
+        self._current_update_id: Optional[str] = None
 
-    def acquire_update_lock(self) -> bool:
+    def acquire_update_lock(self, update_id: Optional[str] = None) -> bool:
         """
         Acquires atomic lock for staging updates.
         Validates PID liveness of existing lock owner and recovers stale locks.
@@ -121,11 +123,15 @@ class UpdateEngine:
                     except Exception:
                         return False
 
+            effective_update_id = update_id or uuid.uuid4().hex
+            self._current_update_id = effective_update_id
+
             flags = os.O_CREAT | os.O_EXCL | os.O_WRONLY
             fd = os.open(str(self.update_lock_file), flags)
             try:
                 with os.fdopen(fd, "w", encoding="utf-8") as f:
                     data = {
+                        "update_id": effective_update_id,
                         "owner_pid": os.getpid(),
                         "phase": "staging",
                         "time": now,
@@ -139,7 +145,12 @@ class UpdateEngine:
         except Exception:
             return False
 
-    def transfer_update_lock_to_installer(self, installer_pid: int, target_version: str) -> bool:
+    def transfer_update_lock_to_installer(
+        self,
+        installer_pid: int,
+        target_version: str,
+        update_id: Optional[str] = None,
+    ) -> bool:
         """
         Transfers lock ownership to the newly spawned detached installer.
         Ensures update.lock persists throughout installer execution until installer finishes.
@@ -147,8 +158,10 @@ class UpdateEngine:
         """
         if installer_pid <= 0:
             return False
+        effective_update_id = update_id or getattr(self, "_current_update_id", None) or uuid.uuid4().hex
         try:
             lock_data = {
+                "update_id": effective_update_id,
                 "owner_pid": installer_pid,
                 "phase": "installer",
                 "target_version": target_version,
@@ -161,11 +174,28 @@ class UpdateEngine:
         except Exception:
             return False
 
-    def release_update_lock(self) -> None:
-        """Releases staging update lock."""
+    def release_update_lock(
+        self,
+        expected_update_id: Optional[str] = None,
+        expected_owner_pid: Optional[int] = None,
+    ) -> None:
+        """
+        Releases update lock only if ownership matches expected update transaction.
+        Prevents a process from deleting another transaction's newer lock.
+        """
         try:
-            if self.update_lock_file.exists():
-                self.update_lock_file.unlink(missing_ok=True)
+            if not self.update_lock_file.exists():
+                return
+            if expected_update_id is not None or expected_owner_pid is not None:
+                try:
+                    data = json.loads(self.update_lock_file.read_text(encoding="utf-8"))
+                    if expected_update_id is not None and data.get("update_id") != expected_update_id:
+                        return
+                    if expected_owner_pid is not None and data.get("owner_pid") != expected_owner_pid:
+                        return
+                except Exception:
+                    return
+            self.update_lock_file.unlink(missing_ok=True)
         except Exception:
             pass
 
@@ -263,7 +293,8 @@ class UpdateEngine:
         5. Verifies embedded setup version matches release tag.
         6. Launches installer with --wait-for-pid and exits CLI so installer can replace binary safely.
         """
-        if not self.acquire_update_lock():
+        update_id = uuid.uuid4().hex
+        if not self.acquire_update_lock(update_id=update_id):
             return UpdateResult(
                 state=UpdateState.IN_PROGRESS,
                 from_version=current_version,
@@ -470,6 +501,8 @@ class UpdateEngine:
                 str(current_pid),
                 "--update-result",
                 str(receipt_path),
+                "--update-id",
+                str(update_id),
             ]
 
             creationflags = 0
@@ -496,7 +529,11 @@ class UpdateEngine:
                 )
 
             # Transfer update.lock ownership to installer PID (Fail-Closed)
-            transfer_ok = self.transfer_update_lock_to_installer(installer_pid=proc.pid, target_version=target_version)
+            transfer_ok = self.transfer_update_lock_to_installer(
+                installer_pid=proc.pid,
+                target_version=target_version,
+                update_id=update_id,
+            )
             if not transfer_ok:
                 child_exited = False
                 try:
@@ -570,4 +607,4 @@ class UpdateEngine:
             )
         finally:
             if not installer_launched and not retain_lock_on_failure:
-                self.release_update_lock()
+                self.release_update_lock(expected_update_id=update_id, expected_owner_pid=os.getpid())

@@ -137,7 +137,7 @@ class TestPackagedSelfUpdateE2E(unittest.TestCase):
         from local HTTP server -> verifies SHA256 -> verifies setup version -> spawns installer
         with --wait-for-pid -> installer transactional replacement -> new version verified.
         """
-        target_version = "2.4.3"
+        target_version = "2.4.4"
 
         # 1. Simulate existing installed state of older version v2.3.2
         target_bin = self.bin_dir / "disk_investigator.exe"
@@ -234,7 +234,7 @@ class TestPackagedSelfUpdateE2E(unittest.TestCase):
         it must cleanly abort, execute transactional rollback, preserve prior version v2.3.2,
         write receipt with status='failed' and rollback_attempted=True, and release update.lock.
         """
-        target_version = "2.4.3"
+        target_version = "2.4.4"
 
         # 1. Existing installed state of v2.3.2
         target_bin = self.bin_dir / "disk_investigator.exe"

@@ -120,5 +120,23 @@
   - Verified `disk_investigator.exe` bundles the `disk_investigator.updates` subsystem cleanly, honors dynamic environment overrides, and successfully hands off execution to `disk-investigator-setup.exe`.
   - Test suite expanded to 184 tests (184/184 passed, 100% green).
 
-## 8. Current Status
-- **Status**: V2.4.3 Production Release. Fully hardened across 184 unit, lifecycle, invariant, and packaged E2E tests.
+## 8. Completed Milestones (V2.4.4 Cryptographic Transaction Identity & Strict Lock Ownership Verification)
+- [x] Transaction Identity (`update_id`) & Fail-Closed Pre-Mutation Verification:
+  - Every update transaction generates a unique `update_id` (UUID4).
+  - `update.lock` metadata holds `update_id`, `owner_pid`, `phase`, `target_version`, and `time`.
+  - CLI passes `--update-id` to `disk-investigator-setup.exe`.
+  - Installer strictly validates `lock.update_id == cli_update_id`, `lock.phase == "installer"`, `lock.owner_pid in (getpid(), getppid())`, and `lock.target_version == installer_version` BEFORE ANY filesystem mutation.
+  - If mismatch occurs: Installer immediately aborts with `status='failed'`, performing ZERO mutation.
+- [x] Targeted Lock Release Invariant:
+  - `release_update_lock(expected_update_id, expected_owner_pid)` validates transaction identity and owner PID before unlinking.
+  - Older aborting or waking child processes can NEVER delete a newer transaction's lock.
+  - Added Gates 37, 38 & 39 in `test_updates.py`:
+    * Gate 37: `test_installer_refuses_mutation_when_update_id_or_owner_mismatches`
+    * Gate 38: `test_old_installer_cannot_delete_newer_transaction_lock`
+    * Gate 39: `test_unconfirmed_old_child_and_parent_exit_cannot_overlap_second_update`
+- [x] True Packaged Multi-Process Verification:
+  - Both success and rollback E2E tests fully pass with packaged `disk_investigator.exe` and `disk-investigator-setup.exe`.
+  - Test suite expanded to 187 tests (187/187 passed, 100% green).
+
+## 9. Current Status
+- **Status**: V2.4.4 Production Release. Fully hardened across 187 unit, lifecycle, invariant, and packaged E2E tests.

@@ -850,6 +850,130 @@ class TestUpdateSubsystem(unittest.TestCase):
             mock_proc.wait.assert_called_with(timeout=5.0)
             self.assertFalse(self.engine.update_lock_file.exists(), "Lock must be cleanly released after child process confirmed exited")
 
+    # --- Gate 37: Installer Refuses Mutation When Update ID Or Owner Mismatches ---
+    def test_installer_refuses_mutation_when_update_id_or_owner_mismatches(self):
+        """UPDATE-FINAL-37: Installer validates update.lock ownership and update_id before any file mutations."""
+        with tempfile.TemporaryDirectory() as tmp_env:
+            env_root = Path(tmp_env)
+            local_app = env_root / "LocalAppData"
+            user_prof = env_root / "UserProfile"
+            bin_dir = local_app / "DiskInvestigator" / "bin"
+            skill_dir = user_prof / ".gemini" / "config" / "skills" / "disk-cleanup"
+            bin_dir.mkdir(parents=True, exist_ok=True)
+            skill_dir.mkdir(parents=True, exist_ok=True)
+
+            target_exe = bin_dir / "disk_investigator.exe"
+            target_exe.write_bytes(b"ORIGINAL_UNTOUCHED_BIN")
+
+            updates_dir = local_app / "DiskInvestigator" / "updates"
+            updates_dir.mkdir(parents=True, exist_ok=True)
+            lock_file = updates_dir / "update.lock"
+            receipt_file = updates_dir / "last_update_result.json"
+
+            # Scenario: Lock belongs to a different owner / different update_id
+            lock_file.write_text(json.dumps({
+                "update_id": "tx_legit_id_999",
+                "owner_pid": 99999,  # Not current PID
+                "phase": "installer",
+                "target_version": "2.4.4",
+                "time": time.time(),
+            }), encoding="utf-8")
+
+            with patch.dict(os.environ, {"LOCALAPPDATA": str(local_app), "USERPROFILE": str(user_prof)}):
+                with patch("installer.wait_for_pid_to_exit", return_value=PidWaitState.EXITED):
+                    ok = install(
+                        silent=True,
+                        wait_for_pid=1234,
+                        update_result=receipt_file,
+                        update_id="tx_rogue_id_111",
+                    )
+                    self.assertFalse(ok, "Installer must reject execution when update_id / owner PID mismatches")
+                    self.assertEqual(target_exe.read_bytes(), b"ORIGINAL_UNTOUCHED_BIN", "Files must not be modified (Zero Mutation)")
+                    self.assertTrue(receipt_file.exists())
+                    receipt = json.loads(receipt_file.read_text(encoding="utf-8"))
+                    self.assertEqual(receipt["status"], "failed")
+                    self.assertIn("mismatch", receipt["error_message"].lower())
+
+    # --- Gate 38: Old Installer Cannot Delete Newer Transaction Lock ---
+    def test_old_installer_cannot_delete_newer_transaction_lock(self):
+        """UPDATE-FINAL-38: An installer completing or aborting cannot delete an update.lock owned by a newer transaction."""
+        with tempfile.TemporaryDirectory() as tmp_env:
+            local_app = Path(tmp_env) / "LocalAppData"
+            updates_dir = local_app / "DiskInvestigator" / "updates"
+            updates_dir.mkdir(parents=True, exist_ok=True)
+            lock_file = updates_dir / "update.lock"
+
+            # Newer transaction lock active on disk
+            newer_lock_data = {
+                "update_id": "tx_newer_tx_888",
+                "owner_pid": 88888,
+                "phase": "staging",
+                "time": time.time(),
+            }
+            lock_file.write_text(json.dumps(newer_lock_data), encoding="utf-8")
+
+            with patch.dict(os.environ, {"LOCALAPPDATA": str(local_app)}):
+                # Old installer (with tx_older_tx_111, owner 11111) tries to release lock
+                release_update_lock(expected_update_id="tx_older_tx_111", expected_owner_pid=11111)
+
+                # Lock must NOT be deleted
+                self.assertTrue(lock_file.exists(), "Newer transaction lock must survive rogue cleanup from old process")
+                content = json.loads(lock_file.read_text(encoding="utf-8"))
+                self.assertEqual(content["update_id"], "tx_newer_tx_888")
+
+    # --- Gate 39: Unconfirmed Old Child And Parent Exit Cannot Overlap Second Update ---
+    def test_unconfirmed_old_child_and_parent_exit_cannot_overlap_second_update(self):
+        """UPDATE-FINAL-39: Even if child installer could not be killed and parent exits, second update is safe from old child."""
+        with tempfile.TemporaryDirectory() as tmp_env:
+            local_app = Path(tmp_env) / "LocalAppData"
+            user_prof = Path(tmp_env) / "UserProfile"
+            bin_dir = local_app / "DiskInvestigator" / "bin"
+            updates_dir = local_app / "DiskInvestigator" / "updates"
+            bin_dir.mkdir(parents=True, exist_ok=True)
+            updates_dir.mkdir(parents=True, exist_ok=True)
+
+            target_exe = bin_dir / "disk_investigator.exe"
+            target_exe.write_bytes(b"EXISTING_STABLE_BINARY")
+
+            cache_mgr = UpdateCacheManager(base_dir=updates_dir)
+            engine_b = UpdateEngine(cache_mgr)
+
+            with patch.dict(os.environ, {"LOCALAPPDATA": str(local_app), "USERPROFILE": str(user_prof)}):
+                # 1. Old Updater A retained lock because child could not be confirmed dead
+                old_tx_id = "tx_updater_A_111"
+                old_updater_pid = 71111
+                old_installer_pid = 72222
+                engine_b.update_lock_file.write_text(json.dumps({
+                    "update_id": old_tx_id,
+                    "owner_pid": old_updater_pid,
+                    "phase": "staging",
+                    "time": time.time(),
+                }), encoding="utf-8")
+
+                # 2. Updater A exits (old_updater_pid becomes EXITED)
+                with patch("disk_investigator.updates.update_engine.check_pid_state", return_value=PidWaitState.EXITED):
+                    # 3. Second Updater B runs and acquires new lock
+                    new_tx_id = "tx_updater_B_222"
+                    acquired = engine_b.acquire_update_lock(update_id=new_tx_id)
+                    self.assertTrue(acquired, "Updater B successfully recovers and acquires new transaction lock")
+
+                # 4. Meanwhile, old unconfirmed child Installer A wakes up with old_tx_id
+                with patch("installer.wait_for_pid_to_exit", return_value=PidWaitState.EXITED):
+                    receipt_path = updates_dir / "installer_a_receipt.json"
+                    success = install(
+                        silent=True,
+                        wait_for_pid=old_updater_pid,
+                        update_result=receipt_path,
+                        update_id=old_tx_id,
+                    )
+                    self.assertFalse(success, "Old child Installer A must abort without performing mutation")
+                    self.assertEqual(target_exe.read_bytes(), b"EXISTING_STABLE_BINARY", "Target binary must remain completely untouched")
+
+                # 5. Verify Installer A's cleanup did NOT destroy Updater B's lock
+                self.assertTrue(engine_b.update_lock_file.exists(), "Updater B's active lock must remain intact")
+                current_lock = json.loads(engine_b.update_lock_file.read_text(encoding="utf-8"))
+                self.assertEqual(current_lock["update_id"], new_tx_id)
+
 
 if __name__ == "__main__":
     unittest.main()
