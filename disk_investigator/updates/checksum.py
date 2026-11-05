@@ -28,7 +28,9 @@ def compute_sha256(filepath: Path) -> str:
 def parse_sha256sums_manifest(manifest_text: str) -> Dict[str, str]:
     """
     Parses SHA256SUMS.txt format into {filename: sha256_hex_lower}.
-    Strictly validates 64-hex format. Ignores empty or malformed lines without crashing.
+    Strictly validates 64-hex format.
+    Rejects filenames containing path separators or '..' traversal.
+    Rejects duplicate entries (fail-closed).
     """
     results: Dict[str, str] = {}
     if not manifest_text:
@@ -41,9 +43,13 @@ def parse_sha256sums_manifest(manifest_text: str) -> Dict[str, str]:
         match = MANIFEST_LINE_PATTERN.match(line)
         if match:
             digest, filename = match.group(1).lower(), match.group(2).strip()
-            # Normalize filename basename
-            filename_clean = Path(filename).name
-            results[filename_clean] = digest
+            # Invariant: strict exact filename - reject path separators or traversal
+            if "/" in filename or "\\" in filename or ".." in filename:
+                continue
+            # Invariant: reject duplicates
+            if filename in results:
+                raise ValueError(f"Duplicate entry in SHA256SUMS manifest for file: {filename}")
+            results[filename] = digest
     return results
 
 

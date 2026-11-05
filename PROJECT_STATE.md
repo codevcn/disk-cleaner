@@ -74,5 +74,23 @@
   - `SKILL.md` updated with Update Advisory Invariant: updates are advisory, never interrupt cleanup tasks, run `update --yes` only upon explicit user request.
   - Test suite expanded to 170 tests (170/170 passed, 100% green).
 
-## 5. Current Status
-- **Status**: V2.4.0 In-App Self-Update & Non-Blocking SWR Release. Fully verified across 170 unit, lifecycle, and destructive tests. Ready for CI build and publication.
+## 5. Completed Milestones (V2.4.1 Hardened In-App Updates, Lock Ownership Transfer & Fail-Closed PID Waiting)
+- [x] Lock Ownership Transfer & Lifecycle Handoff:
+  - `update.lock` ownership transfers from CLI staging process to `installer.py` PID with metadata JSON.
+  - `installer.py` guarantees `release_update_lock()` and `write_update_receipt()` on ALL exit paths (early failures, payload missing, locked binary, smoke test failure, and rollback).
+- [x] Fail-Closed Tri-State Process Safety:
+  - `PidWaitState` enum (`EXITED`, `RUNNING`, `UNKNOWN`) and `check_pid_state`.
+  - Windows `OpenProcess` error handling distinguishes `ERROR_INVALID_PARAMETER (87)` (process exited) from `ERROR_ACCESS_DENIED (5)` (unknown state, fail-closed).
+  - `wait_for_pid_to_exit` only proceeds on confirmed `EXITED`; aborts with fail-closed failure on `UNKNOWN` or timeout.
+- [x] Strict Version & Manifest Binding:
+  - Strict semver tag validation requires exact `^v\d+\.\d+\.\d+$`.
+  - `disk-investigator-setup --version` requires `returncode == 0` and exact regex `^disk-investigator-setup\s+(\d+\.\d+\.\d+)$`.
+  - `SHA256SUMS.txt` manifest parser rejects path separators (`/`, `\`, `..`) and raises on duplicate filenames.
+- [x] E2E Integration & Rollback Test Coverage:
+  - Added Gate 25 to 30 tests in `test_updates.py`.
+  - Verified real upgrade from simulated older version (v2.3.2 -> v2.4.1) preserving user data.
+  - Verified atomic rollback preserving prior version on installer failures.
+  - Test suite expanded to 176 tests (176/176 passed, 100% green).
+
+## 6. Current Status
+- **Status**: V2.4.1 Production Hardened Release. Fully verified across 176 unit, lifecycle, invariant, and destructive tests. Ready for CI build and publication.

@@ -6,7 +6,9 @@ non-blocking update notifications, and fail-closed security verification.
 
 from __future__ import annotations
 
+import json
 import os
+import re
 import subprocess
 import sys
 import tempfile
@@ -23,6 +25,36 @@ from .release_client import GitHubReleaseClient
 UPDATE_LOCK_TIMEOUT_SECONDS = 600.0  # 10 minutes stale update lock recovery
 SETUP_EXE_NAME = "disk-investigator-setup.exe"
 MANIFEST_NAME = "SHA256SUMS.txt"
+STRICT_TAG_PATTERN = re.compile(r"^v(\d+\.\d+\.\d+)$")
+SETUP_VERSION_OUTPUT_PATTERN = re.compile(r"^disk-investigator-setup\s+(\d+\.\d+\.\d+)$")
+
+
+def is_pid_alive(pid: int) -> bool:
+    """Checks if a process with specified PID is currently active."""
+    if pid <= 0:
+        return False
+    if sys.platform == "win32":
+        import ctypes
+        from ctypes import wintypes
+        SYNCHRONIZE = 0x00100000
+        PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
+        handle = ctypes.windll.kernel32.OpenProcess(SYNCHRONIZE | PROCESS_QUERY_LIMITED_INFORMATION, False, pid)
+        if not handle:
+            return False
+        try:
+            exit_code = wintypes.DWORD()
+            if ctypes.windll.kernel32.GetExitCodeProcess(handle, ctypes.byref(exit_code)):
+                STILL_ACTIVE = 259
+                return exit_code.value == STILL_ACTIVE
+            return False
+        finally:
+            ctypes.windll.kernel32.CloseHandle(handle)
+    else:
+        try:
+            os.kill(pid, 0)
+            return True
+        except OSError:
+            return False
 
 
 class UpdateEngine:
@@ -34,23 +66,39 @@ class UpdateEngine:
         self.update_lock_file = self.cache_mgr.updates_dir / "update.lock"
 
     def acquire_update_lock(self) -> bool:
-        """Acquires atomic lock for staging updates."""
+        """
+        Acquires atomic lock for staging updates.
+        Validates PID liveness of existing lock owner and recovers stale locks.
+        """
         try:
             self.cache_mgr.updates_dir.mkdir(parents=True, exist_ok=True)
             now = time.time()
             if self.update_lock_file.exists():
                 try:
-                    if now - self.update_lock_file.stat().st_mtime < UPDATE_LOCK_TIMEOUT_SECONDS:
-                        return False
+                    lock_data = json.loads(self.update_lock_file.read_text(encoding="utf-8"))
+                    owner_pid = lock_data.get("owner_pid")
+                    lock_time = lock_data.get("time", 0.0)
+                    if owner_pid and is_pid_alive(owner_pid) and (now - lock_time < UPDATE_LOCK_TIMEOUT_SECONDS):
+                        return False  # Still actively running by living owner process
                     self.update_lock_file.unlink(missing_ok=True)
                 except Exception:
-                    pass
+                    try:
+                        if now - self.update_lock_file.stat().st_mtime < UPDATE_LOCK_TIMEOUT_SECONDS:
+                            return False
+                        self.update_lock_file.unlink(missing_ok=True)
+                    except Exception:
+                        pass
 
             flags = os.O_CREAT | os.O_EXCL | os.O_WRONLY
             fd = os.open(str(self.update_lock_file), flags)
             try:
                 with os.fdopen(fd, "w", encoding="utf-8") as f:
-                    f.write(f"pid={os.getpid()}\ntime={now}\n")
+                    data = {
+                        "owner_pid": os.getpid(),
+                        "phase": "staging",
+                        "time": now,
+                    }
+                    json.dump(data, f)
                 return True
             except Exception:
                 return False
@@ -58,6 +106,24 @@ class UpdateEngine:
             return False
         except Exception:
             return False
+
+    def transfer_update_lock_to_installer(self, installer_pid: int, target_version: str) -> None:
+        """
+        Transfers lock ownership to the newly spawned detached installer.
+        Ensures update.lock persists throughout installer execution until installer finishes.
+        """
+        try:
+            lock_data = {
+                "owner_pid": installer_pid,
+                "phase": "installer",
+                "target_version": target_version,
+                "time": time.time(),
+            }
+            tmp = self.update_lock_file.with_suffix(f".tmp_lock_{os.getpid()}")
+            tmp.write_text(json.dumps(lock_data, indent=2), encoding="utf-8")
+            os.replace(str(tmp), str(self.update_lock_file))
+        except Exception:
+            pass
 
     def release_update_lock(self) -> None:
         """Releases staging update lock."""
@@ -170,6 +236,7 @@ class UpdateEngine:
                 error="Staging lock is currently held by another update process.",
             )
 
+        installer_launched = False
         try:
             client = release_client or GitHubReleaseClient(repo=self.cache_mgr.repo)
             try:
@@ -183,7 +250,19 @@ class UpdateEngine:
                     error=str(e),
                 )
 
-            target_version = rel.version
+            # Strict semver tag validation (vX.Y.Z)
+            tag_match = STRICT_TAG_PATTERN.match(rel.tag)
+            if not tag_match:
+                return UpdateResult(
+                    state=UpdateState.FAILED,
+                    from_version=current_version,
+                    target_version=current_version,
+                    release_url=rel.release_url,
+                    message=f"Release tag '{rel.tag}' is not a valid strict semver (vX.Y.Z).",
+                    error="Invalid release tag format (Fail-Closed).",
+                )
+
+            target_version = tag_match.group(1)
             if parse_semver(target_version) <= parse_semver(current_version):
                 return UpdateResult(
                     state=UpdateState.UP_TO_DATE,
@@ -296,7 +375,7 @@ class UpdateEngine:
                         error=f"Checksum mismatch: expected '{expected_sha}', got '{actual_sha}'.",
                     )
 
-                # 4. Embedded version verification: setup must match target tag
+                # 4. Embedded version verification: setup must strictly match target tag
                 try:
                     ver_res = subprocess.run(
                         [str(setup_exe_path), "--version"],
@@ -306,15 +385,26 @@ class UpdateEngine:
                         errors="replace",
                         timeout=10,
                     )
-                    combined_ver_out = (ver_res.stdout + " " + ver_res.stderr).strip()
-                    if target_version not in combined_ver_out:
+                    if ver_res.returncode != 0:
                         return UpdateResult(
                             state=UpdateState.FAILED,
                             from_version=current_version,
                             target_version=target_version,
                             release_url=rel.release_url,
-                            message=f"Downloaded setup executable version mismatch (reports: '{combined_ver_out}').",
-                            error="Setup executable version does not match release tag.",
+                            message=f"Setup executable --version exited with code {ver_res.returncode}.",
+                            error="Setup executable version check failed (Fail-Closed).",
+                        )
+
+                    raw_out = (ver_res.stdout or "").strip()
+                    out_match = SETUP_VERSION_OUTPUT_PATTERN.match(raw_out)
+                    if not out_match or out_match.group(1) != target_version:
+                        return UpdateResult(
+                            state=UpdateState.FAILED,
+                            from_version=current_version,
+                            target_version=target_version,
+                            release_url=rel.release_url,
+                            message=f"Downloaded setup executable version mismatch (reported: '{raw_out}', expected: 'disk-investigator-setup {target_version}').",
+                            error="Setup executable version does not strictly match release tag.",
                         )
                 except Exception as e:
                     return UpdateResult(
@@ -368,6 +458,10 @@ class UpdateEngine:
                     error=str(e),
                 )
 
+            # Mark installer launched and transfer update.lock ownership to installer PID
+            installer_launched = True
+            self.transfer_update_lock_to_installer(installer_pid=proc.pid, target_version=target_version)
+
             # 7. Update cache to record new version checked
             self.cache_mgr.write_cache(
                 UpdateCache(
@@ -397,4 +491,5 @@ class UpdateEngine:
                 ),
             )
         finally:
-            self.release_update_lock()
+            if not installer_launched:
+                self.release_update_lock()

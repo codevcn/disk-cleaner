@@ -22,7 +22,14 @@ from disk_investigator.cli import main as cli_main
 ROOT_DIR = Path(__file__).resolve().parent.parent.parent
 if str(ROOT_DIR) not in sys.path:
     sys.path.insert(0, str(ROOT_DIR))
-from installer import wait_for_pid_to_exit, write_update_receipt
+from installer import (
+    wait_for_pid_to_exit,
+    write_update_receipt,
+    check_pid_state,
+    PidWaitState,
+    release_update_lock,
+    install,
+)
 from disk_investigator.updates import (
     BackgroundRefreshManager,
     CacheFreshness,
@@ -311,6 +318,7 @@ class TestUpdateSubsystem(unittest.TestCase):
 
         # Mock --version check on downloaded setup
         mock_ver_res = MagicMock()
+        mock_ver_res.returncode = 0
         mock_ver_res.stdout = "disk-investigator-setup 2.4.0"
         mock_ver_res.stderr = ""
         mock_sub_run.return_value = mock_ver_res
@@ -374,12 +382,12 @@ class TestUpdateSubsystem(unittest.TestCase):
 
     # --- Gate 19, 20: Parent PID Wait and Safety ---
     def test_installer_waits_for_nonexistent_parent_pid(self):
-        """UPDATE-FINAL-19: Non-existent PID exits immediately (returns True)."""
-        self.assertTrue(wait_for_pid_to_exit(99999999, timeout_seconds=0.5))
+        """UPDATE-FINAL-19: Non-existent PID exits immediately (returns PidWaitState.EXITED)."""
+        self.assertEqual(wait_for_pid_to_exit(99999999, timeout_seconds=0.5), PidWaitState.EXITED)
 
     @patch("ctypes.windll.kernel32.OpenProcess")
     def test_installer_timeout_does_not_kill_parent(self, mock_open_proc):
-        """UPDATE-FINAL-20: If parent does not exit within timeout, returns False without killing."""
+        """UPDATE-FINAL-20: If parent does not exit within timeout, returns PidWaitState.RUNNING without killing."""
         # Mock handle that always returns STILL_ACTIVE
         mock_open_proc.return_value = 1234
         with patch("ctypes.windll.kernel32.GetExitCodeProcess") as mock_get_code:
@@ -389,13 +397,14 @@ class TestUpdateSubsystem(unittest.TestCase):
             mock_get_code.side_effect = fake_get_code
             with patch("ctypes.windll.kernel32.CloseHandle"):
                 res = wait_for_pid_to_exit(12345, timeout_seconds=0.4)
-                self.assertFalse(res, "Must return False on timeout")
+                self.assertEqual(res, PidWaitState.RUNNING, "Must return RUNNING on timeout")
 
     # --- Gate 16: Setup Embedded Version Verification ---
     @patch("subprocess.run")
     def test_setup_embedded_version_must_match_tag(self, mock_sub_run):
         """UPDATE-FINAL-16: Setup embedded version must strictly equal release tag."""
         mock_ver_res = MagicMock()
+        mock_ver_res.returncode = 0
         mock_ver_res.stdout = "disk-investigator-setup 2.3.2"  # Outdated version!
         mock_ver_res.stderr = ""
         mock_sub_run.return_value = mock_ver_res
@@ -454,6 +463,207 @@ class TestUpdateSubsystem(unittest.TestCase):
             out = json.loads(mock_stdout.getvalue())
             self.assertEqual(out["status"], "success")
             self.assertEqual(out["last_update"]["to_version"], "2.4.0")
+
+    # --- Gate 25: Strict Checksum Manifest Security & Duplicate Rejection ---
+    def test_parse_manifest_strict_rejects_separators_and_duplicates(self):
+        """UPDATE-FINAL-25: Rejects filenames with path traversal/separators and rejects duplicates."""
+        manifest = (
+            "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855  valid.exe\n"
+            "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855  ../bad.exe\n"
+            "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855  dir/bad.exe\n"
+            "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855  dir\\bad.exe\n"
+        )
+        parsed = parse_sha256sums_manifest(manifest)
+        self.assertIn("valid.exe", parsed)
+        self.assertEqual(len(parsed), 1)
+
+        # Test duplicate entry rejection
+        dup_manifest = (
+            "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855  valid.exe\n"
+            "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855  valid.exe\n"
+        )
+        with self.assertRaises(ValueError):
+            parse_sha256sums_manifest(dup_manifest)
+
+    # --- Gate 26: Strict Tag and Setup Version Regex Binding ---
+    def test_strict_tag_and_setup_version_matching(self):
+        """UPDATE-FINAL-26: Enforces strict semver regex on tag and setup --version output."""
+        from disk_investigator.updates.update_engine import STRICT_TAG_PATTERN, SETUP_VERSION_OUTPUT_PATTERN
+        self.assertIsNotNone(STRICT_TAG_PATTERN.match("v2.4.1"))
+        self.assertIsNone(STRICT_TAG_PATTERN.match("2.4.1"))  # Strict requirement for leading v
+        self.assertIsNone(STRICT_TAG_PATTERN.match("v2.4.1-rc1"))
+        self.assertIsNone(STRICT_TAG_PATTERN.match("v2.4"))
+        self.assertIsNone(STRICT_TAG_PATTERN.match("v2.4.1.0"))
+        self.assertIsNone(STRICT_TAG_PATTERN.match("release-v2.4.1"))
+
+        self.assertIsNotNone(SETUP_VERSION_OUTPUT_PATTERN.match("disk-investigator-setup 2.4.1"))
+        self.assertIsNone(SETUP_VERSION_OUTPUT_PATTERN.match("disk-investigator-setup 2.4.1-beta"))
+        self.assertIsNone(SETUP_VERSION_OUTPUT_PATTERN.match("other-tool 2.4.1"))
+        self.assertIsNone(SETUP_VERSION_OUTPUT_PATTERN.match("disk-investigator-setup v2.4.1"))
+
+    # --- Gate 27: Fail-Closed Tri-State PID Waiting ---
+    @patch("ctypes.windll.kernel32.OpenProcess")
+    @patch("ctypes.GetLastError")
+    def test_tri_state_pid_wait_fail_closed(self, mock_last_err, mock_open_proc):
+        """UPDATE-FINAL-27: check_pid_state returns tri-state and wait_for_pid_to_exit fails closed."""
+        # 1. Invalid parameter (PID dead) -> EXITED
+        mock_open_proc.return_value = 0
+        mock_last_err.return_value = 87  # ERROR_INVALID_PARAMETER
+        self.assertEqual(check_pid_state(12345), PidWaitState.EXITED)
+
+        # 2. Access Denied (PID exists or unknown privilege) -> UNKNOWN (fail-closed)
+        mock_last_err.return_value = 5  # ERROR_ACCESS_DENIED
+        self.assertEqual(check_pid_state(12345), PidWaitState.UNKNOWN)
+
+        # 3. wait_for_pid_to_exit immediately returns UNKNOWN if state is UNKNOWN
+        self.assertEqual(wait_for_pid_to_exit(12345, timeout_seconds=1.0), PidWaitState.UNKNOWN)
+
+        # 4. OpenProcess succeeds but GetExitCodeProcess fails -> UNKNOWN
+        mock_open_proc.return_value = 9999
+        with patch("ctypes.windll.kernel32.GetExitCodeProcess", return_value=0):
+            with patch("ctypes.windll.kernel32.CloseHandle"):
+                self.assertEqual(check_pid_state(12345), PidWaitState.UNKNOWN)
+
+        # 5. OpenProcess succeeds and GetExitCodeProcess returns non-259 -> EXITED
+        with patch("ctypes.windll.kernel32.GetExitCodeProcess") as mock_exit_code:
+            def fake_get_exit(handle, byref):
+                byref._obj.value = 0
+                return 1
+            mock_exit_code.side_effect = fake_get_exit
+            with patch("ctypes.windll.kernel32.CloseHandle"):
+                self.assertEqual(check_pid_state(12345), PidWaitState.EXITED)
+
+    # --- Gate 28: Guaranteed Receipt and Lock Release on Failure Paths ---
+    def test_installer_guaranteed_receipt_and_lock_release_on_all_exits(self):
+        """UPDATE-FINAL-28: Installer writes receipt and releases lock even when payload is missing."""
+        receipt_file = self.base_dir / "failure_receipt.json"
+        updates_dir = self.base_dir / "DiskInvestigator" / "updates"
+        updates_dir.mkdir(parents=True, exist_ok=True)
+        lock_file = updates_dir / "update.lock"
+        lock_file.write_text("active_lock", encoding="utf-8")
+
+        with patch.dict(os.environ, {"LOCALAPPDATA": str(self.base_dir)}):
+            with patch("installer.get_resource_path", return_value=Path("/nonexistent/payload.exe")):
+                ok = install(silent=True, update_result=receipt_file)
+                self.assertFalse(ok)
+                self.assertTrue(receipt_file.exists())
+                rec = json.loads(receipt_file.read_text(encoding="utf-8"))
+                self.assertEqual(rec["status"], "failed")
+                self.assertIn("Không tìm thấy tệp nhị phân", rec["error_message"])
+                self.assertFalse(lock_file.exists(), "update.lock must be cleaned up on failure")
+
+    # --- Gate 29: End-to-End Upgrade from Previous Version ---
+    def test_upgrade_from_previous_version_e2e(self):
+        """UPDATE-FINAL-29: Real E2E upgrade replaces older version and records success receipt."""
+        install_dir = self.base_dir / "DiskInvestigator"
+        bin_dir = install_dir / "bin"
+        skill_dir = self.base_dir / "skills" / "disk-cleanup"
+        skill_ref_dir = skill_dir / "references"
+        bin_dir.mkdir(parents=True, exist_ok=True)
+        skill_ref_dir.mkdir(parents=True, exist_ok=True)
+
+        # 1. Simulate older installed state (v2.3.2)
+        old_bin = bin_dir / "disk_investigator.exe"
+        old_bin.write_bytes(b"OLD_BINARY_V232")
+        old_skill = skill_dir / "SKILL.md"
+        old_skill.write_text("# Old Skill", encoding="utf-8")
+        manifest_file = install_dir / "install_manifest.json"
+        manifest_file.write_text(json.dumps({"app_name": "Disk Investigator", "version": "2.3.2"}), encoding="utf-8")
+
+        # 2. Prepare staging payloads for new version
+        payload_dir = self.base_dir / "payload"
+        payload_dir.mkdir(parents=True, exist_ok=True)
+        new_bin = payload_dir / "disk_investigator.exe"
+        new_bin.write_bytes(b"NEW_BINARY_V241")
+        new_skill = payload_dir / "SKILL.md"
+        new_skill.write_text("# New Skill v2.4.1", encoding="utf-8")
+        new_readme = payload_dir / "README.md"
+        new_readme.write_text("# Readme v2.4.1", encoding="utf-8")
+
+        receipt_file = self.base_dir / "upgrade_receipt.json"
+
+        def mock_get_resource(name):
+            return payload_dir / name
+
+        with patch.dict(os.environ, {"LOCALAPPDATA": str(self.base_dir)}):
+            with patch("installer.get_target_directories", return_value=(install_dir, bin_dir, skill_dir, skill_ref_dir)):
+                with patch("installer.get_resource_path", side_effect=mock_get_resource):
+                    with patch("installer.add_bin_to_user_path", return_value=(True, False)):
+                        with patch("installer.run_smoke_test", return_value=True):
+                            with patch("installer.get_installer_version", return_value="2.4.1"):
+                                ok = install(silent=True, update_result=receipt_file)
+                                self.assertTrue(ok)
+
+        # Verify files and manifest are upgraded
+        self.assertEqual(old_bin.read_bytes(), b"NEW_BINARY_V241")
+        self.assertEqual(old_skill.read_text(encoding="utf-8"), "# New Skill v2.4.1")
+        updated_manifest = json.loads(manifest_file.read_text(encoding="utf-8"))
+        self.assertEqual(updated_manifest["version"], "2.4.1")
+
+        # Verify receipt
+        self.assertTrue(receipt_file.exists())
+        receipt = json.loads(receipt_file.read_text(encoding="utf-8"))
+        self.assertEqual(receipt["status"], "success")
+        self.assertEqual(receipt["from_version"], "2.3.2")
+        self.assertEqual(receipt["to_version"], "2.4.1")
+        self.assertFalse(receipt["rollback_attempted"])
+
+    # --- Gate 30: End-to-End Upgrade Rollback on Failure ---
+    def test_failed_update_preserves_previous_version_and_records_rollback_receipt(self):
+        """UPDATE-FINAL-30: Failure during installation triggers rollback, restores original files and records failure."""
+        install_dir = self.base_dir / "DiskInvestigator"
+        bin_dir = install_dir / "bin"
+        skill_dir = self.base_dir / "skills" / "disk-cleanup"
+        skill_ref_dir = skill_dir / "references"
+        bin_dir.mkdir(parents=True, exist_ok=True)
+        skill_ref_dir.mkdir(parents=True, exist_ok=True)
+
+        # 1. Older installed state (v2.3.2)
+        old_bin = bin_dir / "disk_investigator.exe"
+        old_bin.write_bytes(b"ORIGINAL_BINARY_V232")
+        old_skill = skill_dir / "SKILL.md"
+        old_skill.write_text("# Original Skill v2.3.2", encoding="utf-8")
+        manifest_file = install_dir / "install_manifest.json"
+        manifest_file.write_text(json.dumps({"app_name": "Disk Investigator", "version": "2.3.2"}), encoding="utf-8")
+
+        # 2. Staging payloads
+        payload_dir = self.base_dir / "payload"
+        payload_dir.mkdir(parents=True, exist_ok=True)
+        new_bin = payload_dir / "disk_investigator.exe"
+        new_bin.write_bytes(b"CORRUPT_OR_FAILING_PAYLOAD")
+        new_skill = payload_dir / "SKILL.md"
+        new_skill.write_text("# Corrupt Skill", encoding="utf-8")
+        new_readme = payload_dir / "README.md"
+        new_readme.write_text("# Readme", encoding="utf-8")
+
+        receipt_file = self.base_dir / "rollback_receipt.json"
+
+        def mock_get_resource(name):
+            return payload_dir / name
+
+        with patch.dict(os.environ, {"LOCALAPPDATA": str(self.base_dir)}):
+            with patch("installer.get_target_directories", return_value=(install_dir, bin_dir, skill_dir, skill_ref_dir)):
+                with patch("installer.get_resource_path", side_effect=mock_get_resource):
+                    with patch("installer.add_bin_to_user_path", return_value=(True, False)):
+                        # Force smoke test failure
+                        with patch("installer.run_smoke_test", return_value=False):
+                            with patch("installer.get_installer_version", return_value="2.4.1"):
+                                ok = install(silent=True, update_result=receipt_file)
+                                self.assertFalse(ok)
+
+        # Verify rollback preserved original state
+        self.assertEqual(old_bin.read_bytes(), b"ORIGINAL_BINARY_V232")
+        self.assertEqual(old_skill.read_text(encoding="utf-8"), "# Original Skill v2.3.2")
+        preserved_manifest = json.loads(manifest_file.read_text(encoding="utf-8"))
+        self.assertEqual(preserved_manifest["version"], "2.3.2")
+
+        # Verify receipt records failure and rollback
+        self.assertTrue(receipt_file.exists())
+        receipt = json.loads(receipt_file.read_text(encoding="utf-8"))
+        self.assertEqual(receipt["status"], "failed")
+        self.assertTrue(receipt["rollback_attempted"])
+        self.assertEqual(receipt["from_version"], "2.3.2")
+        self.assertEqual(receipt["to_version"], "2.4.1")
 
 
 if __name__ == "__main__":
