@@ -42,6 +42,12 @@ This skill turns Antigravity into a **General-Purpose Windows AI Storage Investi
    - **Virtual Disks**: Docker `ext4.vhdx` and VM disks are strictly **BLOCKED** from raw deletion.
    - **Medical Records**: DICOM imaging data (`.dcm`, `.dicom`) is strictly **BLOCKED**.
    - **AI Models & Games**: Ollama blobs, HuggingFace hub caches, and Steam installed games require **explicit human review** (never silently wiped).
+7. **Update Advisory Invariant (Non-Blocking Guarantees)**:
+   - Update notifications in `stderr` are **strictly advisory and non-blocking**.
+   - **Never interrupt, pause, or abort an active investigation or cleanup workflow** solely because an update is available. Always complete the user's storage optimization task first.
+   - **Never run `disk_investigator update --yes` automatically** without explicit user request.
+   - Execute an update only when the user explicitly instructs you to update the tool (e.g. *"hãy update tool lên bản mới nhất"*).
+   - When updating, report the handoff state accurately; do not claim the update completed until verified via `disk_investigator update --status` or `disk_investigator --version`.
 
 ---
 
@@ -115,6 +121,18 @@ python -m disk_investigator execute-plan <plan_id> --items 1,2,5
 python -m disk_investigator execute-plan <plan_id> --items 1,2,5 --apply
 ```
 
+### 7. Self-Update (In-App Staged Upgrade)
+```bash
+# Check update status:
+python -m disk_investigator check-update
+
+# Run in-app self-update unattended (when user explicitly requests):
+python -m disk_investigator update --yes
+
+# Inspect update receipt:
+python -m disk_investigator update --status
+```
+
 ---
 
 ## 4. Interaction Guide for AI Agents
@@ -125,3 +143,4 @@ When assisting a user with disk cleanup or storage investigation:
 3. **Never attempt to clean items marked `BLOCK` or `REVIEW_ONLY`**. Explain to the user why items like model weights, games, or PST archives require manual management.
 4. **Generate a `cleanup-plan`** and present the proposed items to the user with exact paths, sizes, and risk levels.
 5. **Obtain explicit user approval** before running `execute-plan --apply`.
+6. **If an update advisory appears in stderr**, continue and complete the cleanup task first. Only inform the user of the update at the end of the conversation, and run `update --yes` only if the user explicitly asks to update.

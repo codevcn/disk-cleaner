@@ -152,7 +152,7 @@ def run_tests() -> bool:
     print("[*] Đang chạy kiểm thử tự động (Quality Gate)...")
     res = run_cmd([sys.executable, "-m", "unittest", "discover", "-s", "disk_investigator/tests", "-v"])
     if res.returncode == 0:
-        print("[+] Toàn bộ 59 bài kiểm thử đã vượt qua thành công.")
+        print("[+] Toàn bộ bài kiểm thử đã vượt qua thành công.")
         return True
     else:
         print("[ERROR] Kiểm thử thất bại! Hủy cập nhật để bảo vệ hệ thống hiện tại.")
@@ -162,7 +162,7 @@ def run_tests() -> bool:
 
 
 def rebuild_executables() -> bool:
-    """Triggers build_exe.py and build_installer.py."""
+    """Triggers build_exe.py, build_installer.py, and build_uninstaller.py."""
     print("[*] Đang biên dịch lại binary độc lập (disk_investigator.exe)...")
     res_bin = run_cmd([sys.executable, "build_exe.py"])
     if res_bin.returncode != 0:
@@ -178,6 +178,14 @@ def rebuild_executables() -> bool:
         print(res_inst.stderr)
         return False
     print("[+] Setup EXE đã được đóng gói thành công.")
+
+    print("[*] Đang đóng gói bộ gỡ cài đặt độc lập (disk-investigator-uninstall.exe)...")
+    res_uninst = run_cmd([sys.executable, "build_uninstaller.py"])
+    if res_uninst.returncode != 0:
+        print(f"[ERROR] Thất bại khi đóng gói uninstaller. Code: {res_uninst.returncode}")
+        print(res_uninst.stderr)
+        return False
+    print("[+] Uninstaller EXE đã được đóng gói thành công.")
     return True
 
 

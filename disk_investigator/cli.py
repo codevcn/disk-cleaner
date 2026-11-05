@@ -16,6 +16,7 @@ from .cleanup import PlanGenerator, SafeExecutor
 from .detectors import DeveloperDetector, DockerDetector, LargeFilesDetector
 from .models import BackendKind
 from .services import DrilldownService, ScanService
+from .updates import BackgroundRefreshManager, UpdateCacheManager, UpdateEngine, UpdateState
 from .version_checker import check_for_updates, notify_if_update_available
 
 # Ensure UTF-8 output on Windows consoles
@@ -277,6 +278,28 @@ def build_parser() -> argparse.ArgumentParser:
         help="Bypass cache and query GitHub immediately",
     )
 
+    # Command: update
+    update_parser = subparsers.add_parser(
+        "update",
+        help="Download and install the latest official release of disk_investigator",
+    )
+    update_parser.add_argument(
+        "--yes", "-y",
+        action="store_true",
+        help="Skip interactive confirmation prompt (unattended upgrade)",
+    )
+    update_parser.add_argument(
+        "--status",
+        action="store_true",
+        help="Inspect the receipt of the last completed or attempted update",
+    )
+
+    # Hidden Command: _refresh-update-cache
+    subparsers.add_parser(
+        "_refresh-update-cache",
+        help=argparse.SUPPRESS,
+    )
+
     return parser
 
 
@@ -290,7 +313,13 @@ def main(args: Optional[List[str]] = None) -> int:
 
     pretty = not parsed.compact
 
-    # Background / unobtrusive update notification to stderr
+    # Hidden worker path: must run detached worker without emitting advisories
+    if parsed.command == "_refresh-update-cache":
+        mgr = BackgroundRefreshManager()
+        mgr.run_worker(__version__)
+        return 0
+
+    # Background / unobtrusive update notification to stderr (100% network-free on foreground)
     notify_if_update_available(__version__)
 
     try:
@@ -323,6 +352,38 @@ def main(args: Optional[List[str]] = None) -> int:
             info = check_for_updates(__version__, force=parsed.force)
             _json_output({"status": "success", "update_info": info}, pretty=pretty)
             return 0
+
+        if parsed.command == "update":
+            cache_mgr = UpdateCacheManager()
+            if parsed.status:
+                receipt = cache_mgr.read_receipt()
+                if not receipt:
+                    _json_output({
+                        "status": "success",
+                        "last_update": None,
+                        "message": "No previous update receipt found.",
+                    }, pretty=pretty)
+                    return 0
+                _json_output({
+                    "status": "success",
+                    "last_update": receipt.to_dict(),
+                }, pretty=pretty)
+                return 0
+
+            engine = UpdateEngine(cache_mgr)
+            update_res = engine.execute_update(current_version=__version__, yes=parsed.yes)
+            is_ok = update_res.state in (UpdateState.UP_TO_DATE, UpdateState.HANDOFF_STARTED)
+            _json_output({
+                "status": "success" if is_ok else "failed",
+                "update": update_res.to_dict(),
+            }, pretty=pretty)
+
+            if update_res.state in (UpdateState.HANDOFF_STARTED, UpdateState.UP_TO_DATE):
+                return 0
+            elif update_res.state == UpdateState.CANCELLED:
+                return 2
+            else:
+                return 1
 
         # Initialize services
         scan_service = ScanService()

@@ -92,6 +92,81 @@ def get_installer_version() -> str:
     return get_app_version()
 
 
+def wait_for_pid_to_exit(pid: int, timeout_seconds: float = 30.0) -> bool:
+    """
+    Waits for process with PID to exit without force-killing.
+    Returns True if process has exited, False if timed out.
+    """
+    if pid <= 0:
+        return True
+
+    deadline = time.time() + timeout_seconds
+    while time.time() < deadline:
+        if sys.platform == "win32":
+            SYNCHRONIZE = 0x00100000
+            PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
+            handle = ctypes.windll.kernel32.OpenProcess(SYNCHRONIZE | PROCESS_QUERY_LIMITED_INFORMATION, False, pid)
+            if not handle:
+                return True  # Process does not exist or already exited
+            try:
+                exit_code = wintypes.DWORD()
+                if ctypes.windll.kernel32.GetExitCodeProcess(handle, ctypes.byref(exit_code)):
+                    STILL_ACTIVE = 259
+                    if exit_code.value != STILL_ACTIVE:
+                        return True
+                else:
+                    return True
+            finally:
+                ctypes.windll.kernel32.CloseHandle(handle)
+        else:
+            try:
+                os.kill(pid, 0)
+            except OSError:
+                return True
+        time.sleep(0.2)
+
+    return False
+
+
+def write_update_receipt(
+    receipt_path: Optional[Path],
+    status: str,
+    from_ver: str,
+    to_ver: str,
+    exit_code: int,
+    error_msg: Optional[str] = None,
+    rollback: bool = False,
+) -> None:
+    """Writes update receipt to specified path and default updates directory."""
+    receipt_data = {
+        "schema_version": 1,
+        "status": status,
+        "from_version": from_ver,
+        "to_version": to_ver,
+        "completed_at": datetime.datetime.now().astimezone().isoformat(),
+        "installer_exit_code": exit_code,
+        "error_message": error_msg,
+        "rollback_attempted": rollback,
+    }
+    targets = []
+    if receipt_path:
+        targets.append(Path(receipt_path))
+
+    local_app_data = os.environ.get("LOCALAPPDATA")
+    if local_app_data:
+        targets.append(Path(local_app_data) / "DiskInvestigator" / "updates" / "last_update_result.json")
+
+    for p in targets:
+        try:
+            p.parent.mkdir(parents=True, exist_ok=True)
+            tmp_p = p.with_suffix(f".tmp_{os.getpid()}")
+            with open(tmp_p, "w", encoding="utf-8") as f:
+                json.dump(receipt_data, f, indent=2, ensure_ascii=False)
+            os.replace(str(tmp_p), str(p))
+        except Exception:
+            pass
+
+
 def generate_uninstaller_script(install_dir: Path, bin_dir: Path, skill_path: Path) -> Path:
     """
     Generates a standalone uninstall.cmd script in the install directory.
@@ -184,11 +259,15 @@ def run_smoke_test(target_exe: Path) -> bool:
 def install(
     silent: bool = False,
     repair: bool = False,
+    wait_for_pid: int = 0,
+    update_result: Optional[Path] = None,
 ) -> bool:
     """
     Main 1-Click All-in-One installation procedure.
     Guarantees transactional execution, user PATH setup, skill deployment, and backup.
     """
+    current_version = get_installer_version()
+
     print("=======================================================")
     print(f"       CÀI ĐẶT {APP_DISPLAY_NAME}")
     print("=======================================================")
@@ -205,6 +284,26 @@ def install(
     target_docs = install_dir / "README.md"
     target_skill = skill_dir / "SKILL.md"
     target_skill_ref_docs = skill_ref_dir / "README.md"
+
+    prev_manifest = load_manifest(install_dir)
+    prev_version = prev_manifest.get("version", "unknown") if prev_manifest else "unknown"
+
+    # Staged lifecycle handoff: wait for parent PID to exit if requested
+    if wait_for_pid > 0:
+        print(f"[*] Đang chờ tiến trình cha (PID: {wait_for_pid}) kết thúc...")
+        if not wait_for_pid_to_exit(wait_for_pid, timeout_seconds=30.0):
+            print(f"[ERROR] Quá thời gian 30s chờ PID {wait_for_pid} kết thúc. HỦY CÀI ĐẶT.")
+            write_update_receipt(
+                update_result,
+                status="failed",
+                from_ver=prev_version,
+                to_ver=current_version,
+                exit_code=1,
+                error_msg=f"Timeout waiting for parent PID {wait_for_pid} to exit",
+                rollback=False,
+            )
+            return False
+        print(f"[+] Tiến trình cha PID {wait_for_pid} đã kết thúc an toàn.")
 
     print(f"Thư mục cài đặt:   {install_dir}")
     print(f"Đường dẫn binary:  {target_exe}")
@@ -453,6 +552,15 @@ def install(
     except Exception as e:
         print(f"[ERROR] Quá trình cài đặt thất bại: {e}")
         perform_rollback(path_changed=path_changed)
+        write_update_receipt(
+            update_result,
+            status="failed",
+            from_ver=prev_version,
+            to_ver=current_version,
+            exit_code=1,
+            error_msg=str(e),
+            rollback=True,
+        )
         return False
 
     # Clean up rollback journal on success
@@ -470,6 +578,15 @@ def install(
                 bf.unlink()
             except Exception:
                 pass
+
+    write_update_receipt(
+        update_result,
+        status="success",
+        from_ver=prev_version,
+        to_ver=current_version,
+        exit_code=0,
+        rollback=False,
+    )
 
     print("\n=======================================================")
     print(f"       CÀI ĐẶT THÀNH CÔNG {APP_DISPLAY_NAME}!       ")
@@ -529,6 +646,18 @@ def main() -> int:
         action="store_true",
         help="Skip final pause in interactive mode.",
     )
+    parser.add_argument(
+        "--wait-for-pid",
+        type=int,
+        default=0,
+        help="Wait for specified PID to exit before starting installation.",
+    )
+    parser.add_argument(
+        "--update-result",
+        type=Path,
+        default=None,
+        help="Optional path to write update result receipt JSON.",
+    )
 
     args = parser.parse_args()
 
@@ -543,7 +672,12 @@ def main() -> int:
                 pass
         return result.exit_code
     else:
-        success = install(silent=args.silent, repair=args.repair)
+        success = install(
+            silent=args.silent,
+            repair=args.repair,
+            wait_for_pid=args.wait_for_pid,
+            update_result=args.update_result,
+        )
         if interactive and not args.no_pause:
             try:
                 input("\nNhấn Enter để đóng cửa sổ...")

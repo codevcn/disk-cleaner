@@ -60,5 +60,19 @@
   - `.github/workflows/ci.yml` updated to build, smoke test, and release all 3 executables.
   - Full suite of 140 tests passing 100% green.
 
-## 4. Current Status
-- **Status**: V2.3.2 Production Hardening Release. Standalone 1-Click Uninstaller with ownership-aware purge semantics, strict Windows NTFS junction escape validation, safe self-preservation, post-delete verification, and unknown-file protection. 149/149 unit and integration tests passing.
+## 4. Completed Milestones (V2.4.0 In-App Self-Update & Non-Blocking SWR Engine)
+- [x] In-App Self-Update & Staged Lifecycle Handoff:
+  - `disk_investigator/updates/`: Dedicated subsystem with typed models, `GitHubReleaseClient`, atomic checksum verification, 24h cache TTL, 7d max-stale boundary, and single-flight `update.lock`.
+  - `disk_investigator update --yes`: Downloads release assets, verifies SHA-256 against `SHA256SUMS.txt`, verifies embedded setup version, and hands off to installer with `--wait-for-pid`.
+  - Staged Handoff: Running CLI exits cleanly with `HANDOFF_STARTED`, installer waits exact parent PID without killing processes, executes transactional upgrade, and records `last_update_result.json` receipt.
+- [x] Non-Blocking Auto-Check & Advisory:
+  - Foreground CLI commands (`doctor`, `overview`, `scan`, `investigate`, etc.) are 100% network-free.
+  - Stale cache schedules a detached background worker (`_refresh-update-cache`) with atomic `refresh.lock`.
+  - Kill-switch via `DISK_INVESTIGATOR_NO_UPDATE_CHECK=1` for complete silence.
+  - Clean advisory to `stderr`: removed all emojis, removed false references to `update.cmd` and `python update_from_github.py`.
+- [x] Skill & Invariant Updates:
+  - `SKILL.md` updated with Update Advisory Invariant: updates are advisory, never interrupt cleanup tasks, run `update --yes` only upon explicit user request.
+  - Test suite expanded to 170 tests (170/170 passed, 100% green).
+
+## 5. Current Status
+- **Status**: V2.4.0 In-App Self-Update & Non-Blocking SWR Release. Fully verified across 170 unit, lifecycle, and destructive tests. Ready for CI build and publication.
