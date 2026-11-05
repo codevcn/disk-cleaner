@@ -8,6 +8,7 @@ from __future__ import annotations
 import json
 import os
 import shutil
+import ssl
 import urllib.error
 import urllib.request
 from pathlib import Path
@@ -19,12 +20,25 @@ DEFAULT_REPO = "codevcn/disk-cleaner"
 DEFAULT_USER_AGENT = "disk-investigator-release-client"
 
 
+def get_ssl_context() -> Optional[ssl.SSLContext]:
+    """Provides robust SSL context with CA bundle support if available."""
+    try:
+        try:
+            import certifi
+            return ssl.create_default_context(cafile=certifi.where())
+        except Exception:
+            return ssl.create_default_context()
+    except Exception:
+        return None
+
+
 class GitHubReleaseClient:
     """Client for discovering releases and fetching release assets from GitHub."""
 
     def __init__(self, repo: str = DEFAULT_REPO, user_agent: str = DEFAULT_USER_AGENT):
         self.repo = repo
         self.user_agent = user_agent
+        self._ssl_ctx = get_ssl_context()
 
     def get_latest_release(self, timeout: float = 5.0) -> ReleaseInfo:
         """
@@ -41,7 +55,10 @@ class GitHubReleaseClient:
         )
 
         try:
-            with urllib.request.urlopen(req, timeout=timeout) as resp:
+            kwargs = {"timeout": timeout}
+            if self._ssl_ctx is not None:
+                kwargs["context"] = self._ssl_ctx
+            with urllib.request.urlopen(req, **kwargs) as resp:
                 if resp.status != 200:
                     raise RuntimeError(f"GitHub API returned HTTP {resp.status}")
                 payload = json.loads(resp.read().decode("utf-8"))
@@ -87,7 +104,10 @@ class GitHubReleaseClient:
             headers={"User-Agent": self.user_agent},
         )
         try:
-            with urllib.request.urlopen(req, timeout=timeout) as resp:
+            kwargs = {"timeout": timeout}
+            if self._ssl_ctx is not None:
+                kwargs["context"] = self._ssl_ctx
+            with urllib.request.urlopen(req, **kwargs) as resp:
                 if resp.status != 200:
                     raise RuntimeError(f"Download HTTP {resp.status} for {url}")
                 return resp.read().decode("utf-8", errors="replace")
@@ -114,7 +134,10 @@ class GitHubReleaseClient:
         )
 
         try:
-            with urllib.request.urlopen(req, timeout=timeout) as resp, open(tmp_file, "wb") as out_f:
+            kwargs = {"timeout": timeout}
+            if self._ssl_ctx is not None:
+                kwargs["context"] = self._ssl_ctx
+            with urllib.request.urlopen(req, **kwargs) as resp, open(tmp_file, "wb") as out_f:
                 if resp.status != 200:
                     raise RuntimeError(f"Download HTTP {resp.status} for {url}")
                 shutil.copyfileobj(resp, out_f)
