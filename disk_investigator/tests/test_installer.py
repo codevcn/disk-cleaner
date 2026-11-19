@@ -5,9 +5,11 @@ test_installer.py - Unit and Integration Tests for Installer Engine (installer.p
 
 from __future__ import annotations
 
+import argparse
 import json
 import os
 import shutil
+import sys
 import tempfile
 import unittest
 from pathlib import Path
@@ -320,6 +322,305 @@ class TestInstaller(unittest.TestCase):
         # Rollback must restore old binary
         self.assertTrue(old_exe.exists())
         self.assertEqual(old_exe.read_text(encoding="utf-8"), "OLD BINARY")
+
+    @patch("installer.get_resource_path")
+    @patch("installer.get_target_directories")
+    @patch("installer.add_bin_to_user_path")
+    @patch("installer.run_smoke_test")
+    def test_install_emits_progress_events_1_to_6(
+        self, mock_smoke, mock_add_path, mock_get_dirs, mock_resource
+    ):
+        inst_dir = self.test_root / "install"
+        bin_dir = inst_dir / "bin"
+        skill_dir = self.test_root / "skill"
+        skill_ref_dir = skill_dir / "references"
+        payload_dir = self.test_root / "payload"
+        payload_dir.mkdir(parents=True, exist_ok=True)
+
+        (payload_dir / "disk_investigator.exe").write_text("MOCK BINARY", encoding="utf-8")
+        (payload_dir / "SKILL.md").write_text("MOCK SKILL", encoding="utf-8")
+        (payload_dir / "README.md").write_text("MOCK README", encoding="utf-8")
+
+        mock_resource.side_effect = lambda name: payload_dir / name
+        mock_get_dirs.return_value = (inst_dir, bin_dir, skill_dir, skill_ref_dir)
+
+        def fake_add_path(target_bin):
+            print(f"[+] Đã thêm vào User PATH: {target_bin}")
+            return True, True
+
+        mock_add_path.side_effect = fake_add_path
+        mock_smoke.return_value = True
+
+        events = []
+        ok = installer.install(silent=False, on_progress=events.append)
+        self.assertTrue(ok)
+
+        step_events = [e for e in events if e.get("type") == "step"]
+        self.assertEqual([e["step"] for e in step_events], [1, 2, 3, 4, 5, 6])
+        self.assertTrue(all(e["total_steps"] == 6 for e in step_events))
+
+        lock_events = [e["locked"] for e in events if e.get("type") == "lock_ui"]
+        self.assertEqual(lock_events, [True, False])
+
+        result_events = [e for e in events if e.get("type") == "result"]
+        self.assertEqual(len(result_events), 1)
+        res = result_events[0]
+        self.assertTrue(res["success"])
+        self.assertFalse(res["rollback_attempted"])
+        self.assertEqual(res["target_exe"], str(bin_dir / "disk_investigator.exe"))
+
+        log_messages = [e["message"] for e in events if e.get("type") == "log"]
+        self.assertTrue(any("User PATH" in m for m in log_messages))
+
+    @patch("installer.get_resource_path")
+    @patch("installer.get_target_directories")
+    @patch("installer.add_bin_to_user_path")
+    @patch("installer.remove_bin_from_user_path")
+    @patch("installer.run_smoke_test")
+    def test_install_emits_rollback_result_on_failure(
+        self, mock_smoke, mock_remove_path, mock_add_path, mock_get_dirs, mock_resource
+    ):
+        inst_dir = self.test_root / "install"
+        bin_dir = inst_dir / "bin"
+        skill_dir = self.test_root / "skill"
+        skill_ref_dir = skill_dir / "references"
+        payload_dir = self.test_root / "payload"
+        payload_dir.mkdir(parents=True, exist_ok=True)
+
+        (payload_dir / "disk_investigator.exe").write_text("MOCK BINARY", encoding="utf-8")
+        (payload_dir / "SKILL.md").write_text("MOCK SKILL", encoding="utf-8")
+        (payload_dir / "README.md").write_text("MOCK README", encoding="utf-8")
+
+        mock_resource.side_effect = lambda name: payload_dir / name
+        mock_get_dirs.return_value = (inst_dir, bin_dir, skill_dir, skill_ref_dir)
+        mock_add_path.return_value = (True, True)
+        mock_remove_path.return_value = True
+        mock_smoke.return_value = False
+
+        events = []
+        ok = installer.install(silent=False, on_progress=events.append)
+        self.assertFalse(ok)
+
+        lock_events = [e["locked"] for e in events if e.get("type") == "lock_ui"]
+        self.assertEqual(lock_events, [True, False])
+
+        result_events = [e for e in events if e.get("type") == "result"]
+        self.assertEqual(len(result_events), 1)
+        res = result_events[0]
+        self.assertFalse(res["success"])
+        self.assertTrue(res["rollback_attempted"])
+        self.assertTrue(res["rollback_succeeded"])
+        self.assertIn("Smoke test", res["error"])
+
+    def test_safe_stdio_under_noconsole_none_streams(self):
+        orig_out, orig_err = sys.stdout, sys.stderr
+        try:
+            sys.stdout = None  # type: ignore[assignment]
+            sys.stderr = None  # type: ignore[assignment]
+            # Must never raise AttributeError on None stdout/stderr
+            installer._safe_print("safe even when stdout is None")
+            installer.configure_safe_stdio(attach_parent_console=False)
+            self.assertIsNotNone(sys.stdout)
+            self.assertIsNotNone(sys.stderr)
+            print("safe write to fallback null stream")
+            sys.stderr.write("safe stderr write\n")
+            sys.stdout.flush()
+        finally:
+            sys.stdout = orig_out
+            sys.stderr = orig_err
+
+    def test_dual_mode_should_launch_gui(self):
+        self.assertTrue(
+            installer.should_launch_gui(
+                argparse.Namespace(uninstall=False, silent=False, wait_for_pid=0)
+            )
+        )
+        self.assertTrue(
+            installer.should_launch_gui(
+                argparse.Namespace(uninstall=False, silent=False, wait_for_pid=0, repair=True)
+            )
+        )
+        self.assertFalse(
+            installer.should_launch_gui(
+                argparse.Namespace(uninstall=False, silent=True, wait_for_pid=0)
+            )
+        )
+        self.assertFalse(
+            installer.should_launch_gui(
+                argparse.Namespace(uninstall=False, silent=False, wait_for_pid=1234)
+            )
+        )
+        self.assertFalse(
+            installer.should_launch_gui(
+                argparse.Namespace(uninstall=True, silent=False, wait_for_pid=0)
+            )
+        )
+        self.assertFalse(
+            installer.should_launch_gui(
+                argparse.Namespace(uninstall=True, silent=True, wait_for_pid=0)
+            )
+        )
+
+    @patch("disk_investigator.lifecycle.installer_gui.run_installer_gui")
+    @patch("installer.install", return_value=True)
+    @patch("installer.UninstallEngine.execute")
+    def test_main_dual_mode_dispatch(self, mock_uninstall, mock_install, mock_gui):
+        mock_uninstall.return_value = MagicMock(exit_code=0)
+        mock_gui.return_value = 0
+
+        # 1. Interactive double-click (no args) -> launches GUI
+        with patch.object(sys, "argv", ["disk-investigator-setup.exe"]):
+            rc = installer.main()
+        self.assertEqual(rc, 0)
+        mock_gui.assert_called_once()
+        mock_install.assert_not_called()
+
+        # 2. --silent -> never launches GUI
+        mock_gui.reset_mock()
+        mock_install.reset_mock()
+        with patch.object(sys, "argv", ["disk-investigator-setup.exe", "--silent"]):
+            rc = installer.main()
+        self.assertEqual(rc, 0)
+        mock_gui.assert_not_called()
+        mock_install.assert_called_once()
+
+        # 3. --wait-for-pid -> never launches GUI
+        mock_gui.reset_mock()
+        mock_install.reset_mock()
+        with patch.object(sys, "argv", ["disk-investigator-setup.exe", "--wait-for-pid", "4321"]):
+            rc = installer.main()
+        self.assertEqual(rc, 0)
+        mock_gui.assert_not_called()
+        mock_install.assert_called_once()
+
+        # 4. --uninstall --silent -> never launches GUI
+        mock_gui.reset_mock()
+        mock_install.reset_mock()
+        with patch.object(sys, "argv", ["disk-investigator-setup.exe", "--uninstall", "--silent"]):
+            rc = installer.main()
+        self.assertEqual(rc, 0)
+        mock_gui.assert_not_called()
+        mock_uninstall.assert_called_once_with(purge_data=False, silent=True)
+
+    def test_installer_gui_queue_and_close_lock(self):
+        import tkinter as tk
+        from disk_investigator.lifecycle.installer_gui import InstallerWindow
+
+        try:
+            root = tk.Tk()
+        except tk.TclError as exc:
+            self.skipTest(f"Tkinter display unavailable: {exc}")
+            return
+
+        root.withdraw()
+        try:
+            win = InstallerWindow(
+                root=root,
+                version="2.4.4",
+                app_display_name="Disk Investigator",
+                install_fn=lambda **kwargs: True,
+            )
+
+            # While running/locked, close button is disabled and WM_DELETE_WINDOW must refuse closing
+            self.assertEqual(str(win.close_btn.cget("state")), "disabled")
+            win._on_close_requested()
+            self.assertTrue(root.winfo_exists())
+            self.assertIn("chờ", win.lock_hint_var.get().lower())
+
+            # Feed simulated worker events
+            win.event_queue.put({"type": "lock_ui", "locked": True})
+            win.event_queue.put({"type": "step", "step": 1, "total_steps": 6, "status_text": "Kiểm tra...", "percent": 15.0})
+            win.event_queue.put({"type": "log", "level": "success", "message": "[+] Bước 1 OK"})
+            win.event_queue.put(
+                {
+                    "type": "result",
+                    "success": False,
+                    "error": "Smoke test vận hành thất bại.",
+                    "rollback_attempted": True,
+                    "rollback_succeeded": True,
+                }
+            )
+            win.event_queue.put({"type": "lock_ui", "locked": False})
+            win.event_queue.put({"type": "worker_done", "success": False})
+            win.drain_events()
+
+            self.assertFalse(win.is_running)
+            self.assertFalse(win.transaction_locked)
+            self.assertFalse(win.final_success)
+            self.assertEqual(win.progress_var.get(), 15.0)
+            self.assertIn("Rollback", win.summary_detail_var.get())
+            self.assertEqual(str(win.close_btn.cget("state")), "normal")
+            self.assertEqual(win.close_btn.cget("text"), "Đóng")
+
+            # Copy logs should succeed
+            win._copy_logs_to_clipboard()
+            self.assertIn("[+] Bước 1 OK", root.clipboard_get())
+
+            # Now close is unlocked and destroys root cleanly
+            win._on_close_requested()
+            with self.assertRaises(tk.TclError):
+                root.winfo_exists()
+        finally:
+            try:
+                root.destroy()
+            except Exception:
+                pass
+
+    def test_installer_gui_worker_thread_and_after_loop(self):
+        import time
+        import tkinter as tk
+        from disk_investigator.lifecycle.installer_gui import InstallerWindow
+
+        try:
+            root = tk.Tk()
+        except tk.TclError as exc:
+            self.skipTest(f"Tkinter display unavailable: {exc}")
+            return
+
+        root.withdraw()
+        try:
+            def fake_install(on_progress=None, **kwargs):
+                on_progress({"type": "lock_ui", "locked": True})
+                on_progress({"type": "step", "step": 1, "total_steps": 6, "status_text": "Bước 1", "percent": 20.0})
+                on_progress({"type": "step", "step": 6, "total_steps": 6, "status_text": "Bước 6", "percent": 95.0})
+                on_progress({
+                    "type": "result",
+                    "success": True,
+                    "version": "2.4.4",
+                    "error": None,
+                    "rollback_attempted": False,
+                    "rollback_succeeded": False,
+                    "install_dir": str(self.test_root),
+                    "target_exe": str(self.test_root / "disk_investigator.exe"),
+                    "target_skill": str(self.test_root / "SKILL.md"),
+                    "skill_backup": None,
+                })
+                on_progress({"type": "lock_ui", "locked": False})
+                return True
+
+            win = InstallerWindow(
+                root=root,
+                version="2.4.4",
+                app_display_name="Disk Investigator",
+                install_fn=fake_install,
+            )
+            win.start()
+
+            deadline = time.time() + 5.0
+            while win.is_running and time.time() < deadline:
+                root.update()
+                time.sleep(0.02)
+
+            self.assertFalse(win.is_running)
+            self.assertTrue(win.final_success)
+            self.assertEqual(win.progress_var.get(), 100.0)
+            self.assertEqual(win.close_btn.cget("text"), "Hoàn tất")
+            self.assertEqual(str(win.close_btn.cget("state")), "normal")
+        finally:
+            try:
+                root.destroy()
+            except Exception:
+                pass
 
 
 if __name__ == "__main__":
