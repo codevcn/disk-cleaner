@@ -1,0 +1,12 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100" fill="none">
+  <!-- Background disk platter & subtle data tracks -->
+  <circle cx="44" cy="44" r="28" stroke="currentColor" stroke-width="6"/>
+  <path d="M 44 26 A 18 18 0 0 0 26 44" stroke="currentColor" stroke-width="4" stroke-linecap="round" opacity="0.55"/>
+  <path d="M 44 62 A 18 18 0 0 0 62 44" stroke="currentColor" stroke-width="4" stroke-linecap="round" opacity="0.55"/>
+  <!-- Investigative cross-hair & spindle -->
+  <circle cx="44" cy="44" r="7" fill="currentColor"/>
+  <circle cx="44" cy="44" r="12" stroke="currentColor" stroke-width="2" stroke-dasharray="4 4" opacity="0.7"/>
+  <!-- Magnifier handle -->
+  <line x1="65" y1="65" x2="84" y2="84" stroke="currentColor" stroke-width="8" stroke-linecap="round"/>
+  <circle cx="84" cy="84" r="4" fill="currentColor"/>
+</svg>

@@ -31,6 +31,7 @@ TARGET_EXE_PATH = ROOT_DIR / TARGET_EXE_NAME
 
 SKILL_PAYLOAD = ROOT_DIR / "skills" / "disk-cleanup" / "SKILL.md"
 BUILD_INFO_PAYLOAD = ROOT_DIR / "build_info.json"
+ICON_PAYLOAD = ROOT_DIR / "assets" / "app_icon.ico"
 
 BUILD_WORK_DIR = ROOT_DIR / "_pyinstaller_uninstaller_work"
 BUILD_DIST_DIR = ROOT_DIR / "_pyinstaller_uninstaller_dist"
@@ -131,6 +132,8 @@ def build_uninstaller() -> bool:
     ]
     if SKILL_PAYLOAD.exists():
         cmd.append(f"--add-data={str(SKILL_PAYLOAD)}{add_data_delimiter}.")
+    if ICON_PAYLOAD.exists():
+        cmd.append(f"--icon={str(ICON_PAYLOAD)}")
 
     cmd.append(str(ENTRY_POINT))
 

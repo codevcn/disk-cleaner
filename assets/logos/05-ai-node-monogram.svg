@@ -1,0 +1,28 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100" fill="none">
+  <!-- Geometric 'D' lettermark for Disk Investigator -->
+  <path
+    d="M 24 20 H 48 C 66.8 20 80 33.2 80 50 C 80 66.8 66.8 80 48 80 H 24 Z"
+    stroke="currentColor"
+    stroke-width="6.5"
+    stroke-linejoin="round"
+  />
+  <!-- AI investigation node circuit inside the 'D' -->
+  <path
+    d="M 38 62 L 50 50 L 64 50"
+    stroke="currentColor"
+    stroke-width="4.5"
+    stroke-linecap="round"
+    stroke-linejoin="round"
+  />
+  <path
+    d="M 50 50 L 38 38"
+    stroke="currentColor"
+    stroke-width="4.5"
+    stroke-linecap="round"
+    opacity="0.65"
+  />
+  <circle cx="38" cy="38" r="4" fill="currentColor" opacity="0.7"/>
+  <circle cx="38" cy="62" r="4.5" fill="currentColor"/>
+  <circle cx="50" cy="50" r="5.5" fill="currentColor"/>
+  <circle cx="64" cy="50" r="4.5" fill="currentColor"/>
+</svg>

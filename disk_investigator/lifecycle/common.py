@@ -128,6 +128,9 @@ def get_resource_path(relative_name: str) -> Path:
                 ue = parent / "disk-investigator-uninstall.exe"
                 if ue.exists():
                     return ue
+            asset_candidate = parent / "assets" / relative_name
+            if asset_candidate.exists():
+                return asset_candidate
             return root_candidate
 
     return Path(relative_name).resolve()

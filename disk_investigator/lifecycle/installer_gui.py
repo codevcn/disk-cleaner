@@ -19,6 +19,8 @@ from typing import Any, Callable, Dict, List, Optional
 import tkinter as tk
 from tkinter import ttk
 
+from .common import get_resource_path
+
 
 def enable_high_dpi_awareness() -> None:
     """Enables Per-Monitor/System DPI awareness on Windows before creating Tk root."""
@@ -63,6 +65,8 @@ class InstallerWindow:
         self.result_info: Dict[str, Any] = {}
         self.log_lines: List[str] = []
         self._copy_reset_after_id: Optional[str] = None
+        self._window_icon_img: Optional[tk.PhotoImage] = None
+        self._header_logo_img: Optional[tk.PhotoImage] = None
 
         self._configure_window()
         self._build_ui()
@@ -74,6 +78,21 @@ class InstallerWindow:
         width, height = 680, 520
         self.root.minsize(600, 460)
         self.root.configure(bg="#F3F3F3")
+
+        try:
+            ico_path = get_resource_path("app_icon.ico")
+            if ico_path.exists():
+                self.root.iconbitmap(default=str(ico_path))
+        except Exception:
+            pass
+
+        try:
+            app_png = get_resource_path("app_icon.png")
+            if app_png.exists():
+                self._window_icon_img = tk.PhotoImage(master=self.root, file=str(app_png))
+                self.root.iconphoto(True, self._window_icon_img)
+        except Exception:
+            pass
 
         try:
             self.root.update_idletasks()
@@ -97,7 +116,26 @@ class InstallerWindow:
         header = tk.Frame(self.root, bg="#FFFFFF", padx=20, pady=14)
         header.pack(fill="x")
 
-        title_row = tk.Frame(header, bg="#FFFFFF")
+        header_inner = tk.Frame(header, bg="#FFFFFF")
+        header_inner.pack(fill="x")
+
+        try:
+            logo_path = get_resource_path("logo_48.png")
+            if logo_path.exists():
+                self._header_logo_img = tk.PhotoImage(master=self.root, file=str(logo_path))
+                logo_lbl = tk.Label(
+                    header_inner,
+                    image=self._header_logo_img,
+                    bg="#FFFFFF",
+                )
+                logo_lbl.pack(side="left", padx=(0, 12))
+        except Exception:
+            pass
+
+        header_text = tk.Frame(header_inner, bg="#FFFFFF")
+        header_text.pack(side="left", fill="x", expand=True)
+
+        title_row = tk.Frame(header_text, bg="#FFFFFF")
         title_row.pack(fill="x")
 
         title_lbl = tk.Label(
@@ -127,7 +165,7 @@ class InstallerWindow:
             else "Bộ cài đặt All-in-One cho Windows 11 (Binary, User PATH & Antigravity Skill)"
         )
         subtitle_lbl = tk.Label(
-            header,
+            header_text,
             text=subtitle_text,
             font=("Segoe UI", 9),
             fg="#5A5A5A",

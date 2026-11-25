@@ -34,6 +34,7 @@ ENTRY_POINT = ROOT_DIR / "disk_investigator" / "__main__.py"
 HISTORY_FILE = ROOT_DIR / "build_history.json"
 TARGET_EXE_NAME = "disk_investigator.exe"
 TARGET_EXE_PATH = ROOT_DIR / TARGET_EXE_NAME
+ICON_FILE = ROOT_DIR / "assets" / "app_icon.ico"
 
 # Temporary directories used during PyInstaller compilation
 BUILD_WORK_DIR = ROOT_DIR / "_pyinstaller_work"
@@ -231,8 +232,10 @@ def build_executable(version_override: Optional[str] = None) -> bool:
         f"--distpath={str(BUILD_DIST_DIR)}",
         f"--workpath={str(BUILD_WORK_DIR)}",
         f"--specpath={str(BUILD_WORK_DIR)}",
-        str(ENTRY_POINT),
     ]
+    if ICON_FILE.exists():
+        cmd.append(f"--icon={str(ICON_FILE)}")
+    cmd.append(str(ENTRY_POINT))
 
     print(f"[*] Running: {' '.join(cmd)}")
     proc = subprocess.run(cmd, cwd=str(ROOT_DIR))

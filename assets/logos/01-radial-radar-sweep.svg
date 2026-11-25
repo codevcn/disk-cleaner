@@ -1,0 +1,14 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100" fill="none">
+  <g stroke="currentColor" stroke-linecap="round" stroke-linejoin="round">
+    <!-- Outer storage platter with swept clean gap -->
+    <path d="M 50 14 A 36 36 0 1 1 20.88 71.16" stroke-width="6.5"/>
+    <!-- Middle investigative ring -->
+    <path d="M 50 26 A 24 24 0 1 1 26 50" stroke-width="4.5" opacity="0.72"/>
+    <!-- Precision radar scan needle -->
+    <line x1="50" y1="50" x2="26" y2="26" stroke-width="4.5"/>
+  </g>
+  <!-- Swept sector accent & central spindle -->
+  <path d="M 50 50 L 20.88 71.16 A 36 36 0 0 1 14 50 Z" fill="currentColor" opacity="0.22"/>
+  <circle cx="50" cy="50" r="7" fill="currentColor"/>
+  <circle cx="26" cy="26" r="3.5" fill="currentColor"/>
+</svg>

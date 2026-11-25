@@ -36,6 +36,9 @@ BINARY_PAYLOAD = ROOT_DIR / "disk_investigator.exe"
 SKILL_PAYLOAD = ROOT_DIR / "skills" / "disk-cleanup" / "SKILL.md"
 README_PAYLOAD = ROOT_DIR / "README.md"
 BUILD_INFO_PAYLOAD = ROOT_DIR / "build_info.json"
+ICON_PAYLOAD = ROOT_DIR / "assets" / "app_icon.ico"
+ICON_PNG_PAYLOAD = ROOT_DIR / "assets" / "app_icon.png"
+LOGO_GUI_PAYLOAD = ROOT_DIR / "assets" / "logo_48.png"
 
 
 def get_current_version() -> str:
@@ -164,8 +167,15 @@ def build_installer() -> bool:
         f"--add-data={str(SKILL_PAYLOAD)}{add_data_delimiter}.",
         f"--add-data={str(README_PAYLOAD)}{add_data_delimiter}.",
         f"--add-data={str(BUILD_INFO_PAYLOAD)}{add_data_delimiter}.",
-        str(ENTRY_POINT),
     ]
+    if ICON_PAYLOAD.exists():
+        cmd.append(f"--icon={str(ICON_PAYLOAD)}")
+        cmd.append(f"--add-data={str(ICON_PAYLOAD)}{add_data_delimiter}.")
+    if ICON_PNG_PAYLOAD.exists():
+        cmd.append(f"--add-data={str(ICON_PNG_PAYLOAD)}{add_data_delimiter}.")
+    if LOGO_GUI_PAYLOAD.exists():
+        cmd.append(f"--add-data={str(LOGO_GUI_PAYLOAD)}{add_data_delimiter}.")
+    cmd.append(str(ENTRY_POINT))
 
     print(f"[*] Running: {' '.join(cmd)}")
     proc = subprocess.run(cmd, cwd=str(ROOT_DIR))
@@ -190,7 +200,7 @@ def build_installer() -> bool:
             text=True,
             encoding="utf-8",
             errors="replace",
-            timeout=15,
+            timeout=30,
         )
         if smoke_proc.returncode != 0:
             print(f"[ERROR] Setup EXE self-test failed with code {smoke_proc.returncode}")
@@ -204,7 +214,7 @@ def build_installer() -> bool:
             text=True,
             encoding="utf-8",
             errors="replace",
-            timeout=15,
+            timeout=30,
         )
         if ver_proc.returncode != 0:
             print(f"[ERROR] Setup EXE --version self-test failed with code {ver_proc.returncode}")

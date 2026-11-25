@@ -622,6 +622,11 @@ class TestInstaller(unittest.TestCase):
             except Exception:
                 pass
 
+    def test_brand_logo_and_icon_assets_resolve(self):
+        for asset_name in ("logo.svg", "app_icon.ico", "app_icon.png", "logo_48.png"):
+            resolved = installer.get_resource_path(asset_name)
+            self.assertTrue(resolved.exists(), f"Expected brand asset missing: {resolved}")
+
 
 if __name__ == "__main__":
     unittest.main()

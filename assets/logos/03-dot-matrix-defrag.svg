@@ -1,0 +1,29 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100" fill="none">
+  <!-- Concentric dot matrix representing disk sectors (left dense, right optimized/clean) -->
+  <g fill="currentColor">
+    <!-- Outer ring (12 positions, 3 cleaned out on upper-right) -->
+    <circle cx="50" cy="14" r="4"/>
+    <circle cx="32" cy="18.8" r="4"/>
+    <circle cx="18.8" cy="32" r="4"/>
+    <circle cx="14" cy="50" r="4"/>
+    <circle cx="18.8" cy="68" r="4"/>
+    <circle cx="32" cy="81.2" r="4"/>
+    <circle cx="50" cy="86" r="4"/>
+    <circle cx="68" cy="81.2" r="4" opacity="0.45"/>
+    <circle cx="81.2" cy="68" r="4" opacity="0.45"/>
+    <!-- Middle ring -->
+    <circle cx="50" cy="27" r="3.6"/>
+    <circle cx="33.7" cy="33.7" r="3.6"/>
+    <circle cx="27" cy="50" r="3.6"/>
+    <circle cx="33.7" cy="66.3" r="3.6"/>
+    <circle cx="50" cy="73" r="3.6"/>
+    <circle cx="66.3" cy="66.3" r="3.6" opacity="0.55"/>
+    <!-- Center hub -->
+    <circle cx="50" cy="50" r="7.5"/>
+  </g>
+  <!-- Clean AI spark replacing reclaimed sectors -->
+  <path
+    d="M 73 19 L 76.2 27.8 L 85 31 L 76.2 34.2 L 73 43 L 69.8 34.2 L 61 31 L 69.8 27.8 Z"
+    fill="currentColor"
+  />
+</svg>

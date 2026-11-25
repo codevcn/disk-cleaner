@@ -1,10 +1,16 @@
+<div align="center">
+
+<img src="assets/logo.svg" alt="Disk Investigator — Isometric Storage Strata logo" width="96">
+
 # General-Purpose Windows AI Storage Investigator (Windows 11)
 
 [![Python 3.12](https://img.shields.io/badge/python-3.12-blue.svg)](https://www.python.org/downloads/)
 [![Platform](https://img.shields.io/badge/platform-Windows%2011-0078D6.svg)](https://www.microsoft.com/windows/)
 [![Architecture](https://img.shields.io/badge/safety-HMAC--SHA256%20%7C%20RecycleBin%20%7C%20Fail--Closed-success.svg)](#safety-invariants--threat-model)
-[![Tests](https://img.shields.io/badge/tests-187%2F187%20passed%20(100%25)-brightgreen.svg)](#testing--verification)
+[![Tests](https://img.shields.io/badge/tests-194%2F194%20passed%20(100%25)-brightgreen.svg)](#testing--verification)
 [![Standalone](https://img.shields.io/badge/executable-single--file%20exe-orange.svg)](#standalone-executable-packaging)
+
+</div>
 
 An autonomous filesystem investigation and safe storage cleanup harness designed specifically for **Google Antigravity** AI agents and power users on **Windows 11**.
 
@@ -150,7 +156,7 @@ For end-users who just want to download a single file and immediately have full 
 
 ### Installation
 1. Download **`disk-investigator-setup.exe`** from [GitHub Releases](https://github.com/codevcn/disk-cleaner/releases/latest).
-2. Double-click or run from CMD/PowerShell:
+2. Double-click to open the native Windows GUI setup window (progress bar, step-by-step status, safe rollback summary, no black console window), or run from CMD/PowerShell:
    ```cmd
    disk-investigator-setup.exe
    ```

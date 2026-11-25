@@ -1,0 +1,472 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Disk Investigator — Logo Concepts Showcase</title>
+  <style>
+    :root {
+      --bg: #f4f6f9;
+      --surface: #ffffff;
+      --surface-alt: #f8fafc;
+      --text: #111827;
+      --muted: #64748b;
+      --border: #e2e8f0;
+      --accent: #0067c0;
+      --shadow: 0 10px 30px rgba(15, 23, 42, 0.06);
+    }
+
+    body.dark {
+      --bg: #0b1120;
+      --surface: #111827;
+      --surface-alt: #1e293b;
+      --text: #f8fafc;
+      --muted: #94a3b8;
+      --border: #1e293b;
+      --shadow: 0 12px 32px rgba(0, 0, 0, 0.4);
+    }
+
+    * {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+    }
+
+    body {
+      font-family: "Segoe UI", -apple-system, BlinkMacSystemFont, Roboto, sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      line-height: 1.55;
+      transition: background 0.25s ease, color 0.25s ease;
+    }
+
+    .container {
+      max-width: 1200px;
+      margin: 0 auto;
+      padding: 36px 24px 64px;
+    }
+
+    header {
+      display: flex;
+      flex-wrap: wrap;
+      justify-content: space-between;
+      align-items: flex-end;
+      gap: 20px;
+      margin-bottom: 32px;
+      padding-bottom: 24px;
+      border-bottom: 1px solid var(--border);
+    }
+
+    .eyebrow {
+      font-size: 12px;
+      font-weight: 700;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+      color: var(--accent);
+      margin-bottom: 6px;
+    }
+
+    h1 {
+      font-size: 28px;
+      font-weight: 700;
+      letter-spacing: -0.02em;
+    }
+
+    .subtitle {
+      color: var(--muted);
+      margin-top: 6px;
+      max-width: 660px;
+      font-size: 14.5px;
+    }
+
+    .controls {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      gap: 12px;
+      background: var(--surface);
+      border: 1px solid var(--border);
+      padding: 10px 14px;
+      border-radius: 12px;
+      box-shadow: var(--shadow);
+    }
+
+    .swatch-group {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+
+    .swatch {
+      width: 24px;
+      height: 24px;
+      border-radius: 999px;
+      border: 2px solid transparent;
+      cursor: pointer;
+      transition: transform 0.15s ease, border-color 0.15s ease;
+    }
+
+    .swatch:hover {
+      transform: scale(1.1);
+    }
+
+    .swatch.active {
+      border-color: var(--text);
+      transform: scale(1.1);
+    }
+
+    .divider {
+      width: 1px;
+      height: 22px;
+      background: var(--border);
+    }
+
+    .btn {
+      font-family: inherit;
+      font-size: 13px;
+      font-weight: 600;
+      padding: 7px 12px;
+      border-radius: 8px;
+      border: 1px solid var(--border);
+      background: var(--surface-alt);
+      color: var(--text);
+      cursor: pointer;
+      transition: background 0.15s ease, border-color 0.15s ease, transform 0.1s ease;
+    }
+
+    .btn:hover {
+      border-color: var(--accent);
+    }
+
+    .btn:active {
+      transform: scale(0.98);
+    }
+
+    .btn-primary {
+      background: var(--accent);
+      color: #ffffff;
+      border-color: var(--accent);
+    }
+
+    .grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(330px, 1fr));
+      gap: 22px;
+    }
+
+    .card {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 16px;
+      padding: 22px;
+      box-shadow: var(--shadow);
+      display: flex;
+      flex-direction: column;
+      gap: 16px;
+      transition: transform 0.2s ease, border-color 0.2s ease;
+    }
+
+    .card:hover {
+      transform: translateY(-3px);
+      border-color: var(--accent);
+    }
+
+    .preview-stage {
+      height: 180px;
+      border-radius: 12px;
+      background: var(--surface-alt);
+      border: 1px solid var(--border);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      position: relative;
+      overflow: hidden;
+    }
+
+    .preview-stage .hero-svg {
+      width: 110px;
+      height: 110px;
+      color: var(--accent);
+      transition: transform 0.25s ease, color 0.2s ease;
+    }
+
+    .card:hover .preview-stage .hero-svg {
+      transform: scale(1.06);
+    }
+
+    .badge-num {
+      position: absolute;
+      top: 10px;
+      left: 12px;
+      font-size: 11px;
+      font-weight: 700;
+      color: var(--muted);
+      background: var(--surface);
+      border: 1px solid var(--border);
+      padding: 2px 8px;
+      border-radius: 999px;
+    }
+
+    .size-strip {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      background: var(--surface-alt);
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      padding: 8px 14px;
+    }
+
+    .size-item {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      color: var(--muted);
+      font-size: 11px;
+      font-weight: 600;
+    }
+
+    .size-item svg {
+      color: var(--accent);
+      display: block;
+    }
+
+    .card-title {
+      font-size: 17px;
+      font-weight: 700;
+    }
+
+    .pattern-tag {
+      display: inline-block;
+      margin-top: 4px;
+      font-size: 11.5px;
+      font-weight: 600;
+      color: var(--accent);
+      background: color-mix(in srgb, var(--accent) 12%, transparent);
+      padding: 2px 8px;
+      border-radius: 6px;
+    }
+
+    .rationale {
+      font-size: 13.5px;
+      color: var(--muted);
+      flex: 1;
+    }
+
+    .card-actions {
+      display: flex;
+      gap: 8px;
+      padding-top: 6px;
+      border-top: 1px solid var(--border);
+    }
+
+    .card-actions .btn {
+      flex: 1;
+      text-align: center;
+      text-decoration: none;
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <header>
+      <div>
+        <div class="eyebrow">Disk Investigator (disk-cleaner) • Logo Concepts</div>
+        <h1>6 Biến Thể Logo SVG</h1>
+        <p class="subtitle">
+          Thiết kế theo hệ thống vector <code>viewBox="0 0 100 100"</code> với <code>currentColor</code>,
+          tối ưu cho Windows 11 app icon (<code>.exe</code>), GitHub README, và skill badge.
+        </p>
+      </div>
+      <div class="controls">
+        <div class="swatch-group" title="Chọn màu chủ đạo">
+          <button class="swatch active" style="background:#0067C0" data-color="#0067C0" aria-label="Windows Blue"></button>
+          <button class="swatch" style="background:#107C10" data-color="#107C10" aria-label="Safe Emerald"></button>
+          <button class="swatch" style="background:#4F46E5" data-color="#4F46E5" aria-label="AI Indigo"></button>
+          <button class="swatch" style="background:#0EA5E9" data-color="#0EA5E9" aria-label="Cyan Radar"></button>
+          <button class="swatch" style="background:#D97706" data-color="#D97706" aria-label="Amber Alert"></button>
+          <button class="swatch" style="background:#18181B" data-color="#18181B" aria-label="Monochrome Dark"></button>
+        </div>
+        <div class="divider"></div>
+        <button class="btn" id="themeToggle">Chuyển Dark Mode</button>
+      </div>
+    </header>
+
+    <main class="grid" id="logoGrid"></main>
+  </div>
+
+  <script>
+    const VARIANTS = [
+      {
+        id: "01",
+        file: "01-radial-radar-sweep.svg",
+        title: "Radial Radar Sweep",
+        pattern: "Concentric Arcs + Precision Scan Sweep",
+        rationale: "Kết hợp đĩa lưu trữ đồng tâm và kim quét radar điều tra. Khoảng hở lát cắt ở góc trên-trái thể hiện dung lượng rác vừa được dọn sạch, cân đối và sắc nét ở cả kích thước nhỏ.",
+        svg: `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100" fill="none">
+  <g stroke="currentColor" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M 50 14 A 36 36 0 1 1 20.88 71.16" stroke-width="6.5"/>
+    <path d="M 50 26 A 24 24 0 1 1 26 50" stroke-width="4.5" opacity="0.72"/>
+    <line x1="50" y1="50" x2="26" y2="26" stroke-width="4.5"/>
+  </g>
+  <path d="M 50 50 L 20.88 71.16 A 36 36 0 0 1 14 50 Z" fill="currentColor" opacity="0.22"/>
+  <circle cx="50" cy="50" r="7" fill="currentColor"/>
+  <circle cx="26" cy="26" r="3.5" fill="currentColor"/>
+</svg>`
+      },
+      {
+        id: "02",
+        file: "02-shield-platter-core.svg",
+        title: "Protected Disk Shield",
+        pattern: "Geometric Shield + Storage Platter",
+        rationale: "Tôn vinh triết lý Fail-Closed và bảo vệ dữ liệu tuyệt đối (HMAC-SHA256, Recycle Bin, chống xóa nhầm). Chiếc khiên vững chãi bao bọc đĩa lưu trữ bên trong.",
+        svg: `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100" fill="none">
+  <path d="M 50 12 L 82 24 V 48 C 82 69 68 82.5 50 89 C 32 82.5 18 69 18 48 V 24 Z" stroke="currentColor" stroke-width="6" stroke-linejoin="round"/>
+  <circle cx="50" cy="48" r="17" stroke="currentColor" stroke-width="4.5" opacity="0.35"/>
+  <path d="M 50 31 A 17 17 0 1 1 35.28 56.5" stroke="currentColor" stroke-width="4.5" stroke-linecap="round"/>
+  <circle cx="50" cy="48" r="6" fill="currentColor"/>
+  <path d="M 50 48 L 62 36" stroke="currentColor" stroke-width="3.5" stroke-linecap="round"/>
+</svg>`
+      },
+      {
+        id: "03",
+        file: "03-dot-matrix-defrag.svg",
+        title: "AI Dot-Matrix Cleanup",
+        pattern: "Concentric Dot Matrix + AI Spark",
+        rationale: "Các vòng tròn chấm biểu trưng cho các block/sector trên ổ đĩa; góc trên-phải được giải phóng thành khoảng trống sạch kèm tia sáng AI, truyền tải cảm giác dữ liệu được sắp xếp thông minh.",
+        svg: `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100" fill="none">
+  <g fill="currentColor">
+    <circle cx="50" cy="14" r="4"/>
+    <circle cx="32" cy="18.8" r="4"/>
+    <circle cx="18.8" cy="32" r="4"/>
+    <circle cx="14" cy="50" r="4"/>
+    <circle cx="18.8" cy="68" r="4"/>
+    <circle cx="32" cy="81.2" r="4"/>
+    <circle cx="50" cy="86" r="4"/>
+    <circle cx="68" cy="81.2" r="4" opacity="0.45"/>
+    <circle cx="81.2" cy="68" r="4" opacity="0.45"/>
+    <circle cx="50" cy="27" r="3.6"/>
+    <circle cx="33.7" cy="33.7" r="3.6"/>
+    <circle cx="27" cy="50" r="3.6"/>
+    <circle cx="33.7" cy="66.3" r="3.6"/>
+    <circle cx="50" cy="73" r="3.6"/>
+    <circle cx="66.3" cy="66.3" r="3.6" opacity="0.55"/>
+    <circle cx="50" cy="50" r="7.5"/>
+  </g>
+  <path d="M 73 19 L 76.2 27.8 L 85 31 L 76.2 34.2 L 73 43 L 69.8 34.2 L 61 31 L 69.8 27.8 Z" fill="currentColor"/>
+</svg>`
+      },
+      {
+        id: "04",
+        file: "04-forensic-lens-disk.svg",
+        title: "Forensic Lens Disk",
+        pattern: "Magnifier Geometry + Disk Tracks",
+        rationale: "Diễn giải trực diện tên gọi 'Disk Investigator': thấu kính điều tra lồng ghép trực tiếp các rãnh đĩa từ và tâm đo đạc, dễ hiểu ngay từ cái nhìn đầu tiên.",
+        svg: `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100" fill="none">
+  <circle cx="44" cy="44" r="28" stroke="currentColor" stroke-width="6"/>
+  <path d="M 44 26 A 18 18 0 0 0 26 44" stroke="currentColor" stroke-width="4" stroke-linecap="round" opacity="0.55"/>
+  <path d="M 44 62 A 18 18 0 0 0 62 44" stroke="currentColor" stroke-width="4" stroke-linecap="round" opacity="0.55"/>
+  <circle cx="44" cy="44" r="7" fill="currentColor"/>
+  <circle cx="44" cy="44" r="12" stroke="currentColor" stroke-width="2" stroke-dasharray="4 4" opacity="0.7"/>
+  <line x1="65" y1="65" x2="84" y2="84" stroke="currentColor" stroke-width="8" stroke-linecap="round"/>
+  <circle cx="84" cy="84" r="4" fill="currentColor"/>
+</svg>`
+      },
+      {
+        id: "05",
+        file: "05-ai-node-monogram.svg",
+        title: "D-Monogram Node Circuit",
+        pattern: "Lettermark + AI Node Network",
+        rationale: "Biểu tượng chữ D (Disk) tối giản chứa mạch kết nối các node phân tích ngữ nghĩa AI. Độ nhận diện thương hiệu cao trên CLI docs, GitHub avatar và badge.",
+        svg: `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100" fill="none">
+  <path d="M 24 20 H 48 C 66.8 20 80 33.2 80 50 C 80 66.8 66.8 80 48 80 H 24 Z" stroke="currentColor" stroke-width="6.5" stroke-linejoin="round"/>
+  <path d="M 38 62 L 50 50 L 64 50" stroke="currentColor" stroke-width="4.5" stroke-linecap="round" stroke-linejoin="round"/>
+  <path d="M 50 50 L 38 38" stroke="currentColor" stroke-width="4.5" stroke-linecap="round" opacity="0.65"/>
+  <circle cx="38" cy="38" r="4" fill="currentColor" opacity="0.7"/>
+  <circle cx="38" cy="62" r="4.5" fill="currentColor"/>
+  <circle cx="50" cy="50" r="5.5" fill="currentColor"/>
+  <circle cx="64" cy="50" r="4.5" fill="currentColor"/>
+</svg>`
+      },
+      {
+        id: "06",
+        file: "06-isometric-strata-clean.svg",
+        title: "Isometric Storage Strata",
+        pattern: "Layered Isometric Planes + AI Spark",
+        rationale: "Các lớp lưu trữ xếp chồng (System, Browser, Creator, Dev, AI/ML) với tầng trên cùng sạch thoáng và ngôi sao AI 4 cánh, phù hợp phong cách công cụ hạ tầng hiện đại.",
+        svg: `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100" fill="none">
+  <g stroke="currentColor" stroke-width="4.8" stroke-linecap="round" stroke-linejoin="round">
+    <polygon points="50,18 82,33 50,48 18,33" fill="currentColor" fill-opacity="0.16"/>
+    <path d="M 18 50 L 50 65 L 82 50" opacity="0.78"/>
+    <path d="M 18 67 L 50 82 L 82 67" opacity="0.52"/>
+  </g>
+  <path d="M 76 12 L 78.8 19.2 L 86 22 L 78.8 24.8 L 76 32 L 73.2 24.8 L 66 22 L 73.2 19.2 Z" fill="currentColor"/>
+  <circle cx="50" cy="33" r="4" fill="currentColor"/>
+</svg>`
+      }
+    ];
+
+    const grid = document.getElementById("logoGrid");
+
+    VARIANTS.forEach((v) => {
+      const card = document.createElement("article");
+      card.className = "card";
+      card.innerHTML = `
+        <div class="preview-stage">
+          <span class="badge-num">#${v.id}</span>
+          <div class="hero-svg">${v.svg}</div>
+        </div>
+        <div class="size-strip">
+          <div class="size-item" title="16px Favicon">
+            <span style="width:16px;height:16px;display:inline-block;">${v.svg}</span> 16px
+          </div>
+          <div class="size-item" title="24px Toolbar">
+            <span style="width:24px;height:24px;display:inline-block;">${v.svg}</span> 24px
+          </div>
+          <div class="size-item" title="40px Taskbar / Tile">
+            <span style="width:40px;height:40px;display:inline-block;">${v.svg}</span> 40px
+          </div>
+        </div>
+        <div>
+          <h2 class="card-title">${v.title}</h2>
+          <span class="pattern-tag">${v.pattern}</span>
+        </div>
+        <p class="rationale">${v.rationale}</p>
+        <div class="card-actions">
+          <button class="btn copy-btn">Copy SVG</button>
+          <a class="btn btn-primary" href="./${v.file}" download="${v.file}">Tải .SVG</a>
+        </div>
+      `;
+
+      const copyBtn = card.querySelector(".copy-btn");
+      copyBtn.addEventListener("click", async () => {
+        try {
+          await navigator.clipboard.writeText(v.svg);
+          copyBtn.textContent = "Đã copy!";
+          setTimeout(() => (copyBtn.textContent = "Copy SVG"), 1500);
+        } catch {
+          copyBtn.textContent = "Lỗi copy";
+        }
+      });
+
+      grid.appendChild(card);
+    });
+
+    document.querySelectorAll(".swatch").forEach((btn) => {
+      btn.addEventListener("click", () => {
+        document.querySelectorAll(".swatch").forEach((b) => b.classList.remove("active"));
+        btn.classList.add("active");
+        document.documentElement.style.setProperty("--accent", btn.dataset.color);
+      });
+    });
+
+    const themeBtn = document.getElementById("themeToggle");
+    themeBtn.addEventListener("click", () => {
+      document.body.classList.toggle("dark");
+      themeBtn.textContent = document.body.classList.contains("dark")
+        ? "Chuyển Light Mode"
+        : "Chuyển Dark Mode";
+    });
+  </script>
+</body>
+</html>
